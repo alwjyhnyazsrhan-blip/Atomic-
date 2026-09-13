@@ -1,0 +1,6 @@
+{
+  "name": "نظام أتمتة ومتابعة لوكيت | Locat Monitor",
+  "description": "لوحة تحكم ونظام أتمتة متكامل للربط مع العرض المباشر في لوكيت، تتبع المناديب، إرسال تنبيهات الواتساب التلقائية عند التأخير، وإصدار التقارير اليومية.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
