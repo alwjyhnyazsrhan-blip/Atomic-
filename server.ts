@@ -24,6 +24,9 @@ import {
 const app = express();
 const PORT = 3000;
 
+// Set Puppeteer Cache Dir so that Render and cloud hosts locate the downloaded Chrome in .cache/puppeteer
+process.env.PUPPETEER_CACHE_DIR = process.env.PUPPETEER_CACHE_DIR || path.join(process.cwd(), '.cache', 'puppeteer');
+
 app.use(express.json());
 
 // --- IN-MEMORY DATA STORE (NO MOCK OR DUMMY DATA) ---
@@ -585,6 +588,9 @@ app.post('/api/settings', (req: Request, res: Response) => {
 
   puppeteerStatus.enabled = settings.enablePuppeteerHeadless;
 
+  // Reconfigure 24/7 automated Puppeteer background scraper
+  setupPuppeteer247Runner();
+
   // Re-evaluate current orders delay state based on new threshold
   orders.forEach((o) => {
     o.isDelayed = o.elapsedMinutes >= settings.delayThresholdMinutes;
@@ -1062,8 +1068,26 @@ async function runPuppeteerScrapeLocat() {
 
   try {
     const puppeteerModule = await import('puppeteer');
+
+    let customExecutablePath: string | undefined = process.env.PUPPETEER_EXECUTABLE_PATH;
+    if (!customExecutablePath) {
+      try {
+        if (typeof (puppeteerModule.default as any).executablePath === 'function') {
+          const resolved = (puppeteerModule.default as any).executablePath();
+          if (resolved && typeof resolved.then === 'function') {
+            customExecutablePath = await resolved;
+          } else if (resolved) {
+            customExecutablePath = resolved;
+          }
+        }
+      } catch (e) {
+        // Fall back to default resolution
+      }
+    }
+
     const browser = await puppeteerModule.default.launch({
       headless: true,
+      ...(customExecutablePath ? { executablePath: customExecutablePath } : {}),
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
@@ -1186,6 +1210,31 @@ app.post('/api/puppeteer/trigger', async (req: Request, res: Response) => {
     puppeteerStatus,
   });
 });
+
+// 5.3 24/7 Automated Background Runner Engine
+let puppeteerScraperInterval: NodeJS.Timeout | null = null;
+
+function setupPuppeteer247Runner() {
+  if (puppeteerScraperInterval) {
+    clearInterval(puppeteerScraperInterval);
+    puppeteerScraperInterval = null;
+  }
+
+  if (settings.enablePuppeteerHeadless) {
+    console.log(`[Puppeteer 24/7 Engine] 🟢 تفعيل محرك السحب التلقائي المستمر 24/7 كل ${settings.locatSyncIntervalSeconds} ثانية`);
+    // Run initial scrape immediately
+    runPuppeteerScrapeLocat().catch((err) => console.error('[Puppeteer 24/7 Startup Error]', err));
+
+    const intervalMs = Math.max(15, settings.locatSyncIntervalSeconds || 30) * 1000;
+    puppeteerScraperInterval = setInterval(() => {
+      if (settings.enablePuppeteerHeadless && !puppeteerStatus.isRunning) {
+        runPuppeteerScrapeLocat().catch((err) => console.error('[Puppeteer 24/7 Interval Error]', err));
+      }
+    }, intervalMs);
+  } else {
+    console.log('[Puppeteer 24/7 Engine] ⚪ المحرك التلقائي في وضع الاستعداد');
+  }
+}
 
 // 6. Automation Script Source Generator (Tampermonkey / Userscript for supplier.locate.sa/orders)
 app.get('/api/automation-script', (req: Request, res: Response) => {
@@ -1585,6 +1634,9 @@ async function startServer() {
   connectToWhatsApp().catch((err) => {
     console.error('[Baileys Startup Error]', err);
   });
+
+  // Start 24/7 automated Puppeteer background scraper if enabled
+  setupPuppeteer247Runner();
 
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
