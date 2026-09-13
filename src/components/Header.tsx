@@ -13,7 +13,8 @@ import {
   ListOrdered, 
   Code,
   Radio,
-  QrCode
+  QrCode,
+  Play
 } from 'lucide-react';
 import { SystemSettings, Order, WhatsAppConnectionState } from '../types';
 
@@ -30,6 +31,7 @@ interface HeaderProps {
   isSyncing: boolean;
   onOpenWhatsApp?: () => void;
   whatsappState?: WhatsAppConnectionState | null;
+  onOpenGuide?: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -45,6 +47,7 @@ export const Header: React.FC<HeaderProps> = ({
   isSyncing,
   onOpenWhatsApp,
   whatsappState,
+  onOpenGuide,
 }) => {
   const delayedOrdersCount = orders.filter((o) => o.isDelayed).length;
 
@@ -152,6 +155,18 @@ export const Header: React.FC<HeaderProps> = ({
               <Send className="w-3.5 h-3.5" />
               <span>إرسال تقرير اليوم للإدارة</span>
             </button>
+
+            {/* Video Guide & Interactive Walkthrough */}
+            {onOpenGuide && (
+              <button
+                onClick={onOpenGuide}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 shadow-2xs transition"
+                title="شرح بالفيديو ودليل الاستخدام التفاعلي"
+              >
+                <Play className="w-3.5 h-3.5 fill-current text-indigo-600" />
+                <span>فيديو الشرح والدليل 🎬</span>
+              </button>
+            )}
 
             {/* Settings */}
             <button

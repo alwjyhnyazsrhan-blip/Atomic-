@@ -9,6 +9,7 @@ import { SettingsModal } from './components/SettingsModal';
 import { CourierModal } from './components/CourierModal';
 import { QuickOrderModal } from './components/QuickOrderModal';
 import { WhatsAppTestModal } from './components/WhatsAppTestModal';
+import { GuideWalkthroughModal } from './components/GuideWalkthroughModal';
 import { Order, Courier, SystemSettings, AlertLog, WhatsAppConnectionState } from './types';
 import { Bell, CheckCircle2, AlertTriangle, X } from 'lucide-react';
 
@@ -51,6 +52,7 @@ export default function App() {
   const [courierToEdit, setCourierToEdit] = useState<Courier | null>(null);
   const [isAddOrderOpen, setIsAddOrderOpen] = useState(false);
   const [isWhatsAppModalOpen, setIsWhatsAppModalOpen] = useState(false);
+  const [isGuideOpen, setIsGuideOpen] = useState(false);
 
   const showToast = (text: string, type: 'success' | 'alert' = 'success') => {
     setToastMessage({ text, type });
@@ -266,6 +268,7 @@ export default function App() {
         isSyncing={isSyncing}
         onOpenWhatsApp={() => setIsWhatsAppModalOpen(true)}
         whatsappState={whatsappState}
+        onOpenGuide={() => setIsGuideOpen(true)}
       />
 
       {/* Main Content Area */}
@@ -351,6 +354,14 @@ export default function App() {
         couriers={couriers}
         onAddOrder={(single) => handleLocatSyncIngest([single])}
         onPasteJson={handleLocatSyncIngest}
+      />
+
+      <GuideWalkthroughModal
+        isOpen={isGuideOpen}
+        onClose={() => setIsGuideOpen(false)}
+        onOpenWhatsApp={() => setIsWhatsAppModalOpen(true)}
+        onOpenSettings={() => setIsSettingsOpen(true)}
+        onOpenCouriers={() => setCurrentTab('couriers')}
       />
     </div>
   );

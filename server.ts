@@ -257,17 +257,17 @@ function formatPhoneForWhatsApp(phone: string): string {
 
 // Helper: Construct Courier Message
 function buildCourierMessage(order: Order, courierName: string): string {
-  return `السلام عليكم أخي ${courierName}،\nنود تذكيرك بأن الطلب ${order.id} متأخر وتجاوز ${order.elapsedMinutes} دقيقة من وقت الاستلام.\nالمطعم: ${order.restaurant}\nالعميل: ${order.customerAddress || 'الوجهة المحددة'}\nيرجى سرعة التسليم والإفادة بحالة التوصيل. شاكرين تعاونك!`;
+  return `السلام عليكم أخي ${courierName}،\nنود تذكيرك بأن الطلب ${order.id} متأخر وتجاوز ${order.elapsedMinutes} دقيقة منذ الاستلام (وقت الاستلام: ${order.pickupTime || 'غير محدد'}).\nالمطعم: ${order.restaurant}\nالعميل: ${order.customerAddress || 'الوجهة المحددة'}\nيرجى سرعة تسليم الطلب للعميل والإفادة بأسباب التأخير وحالة التوصيل الحالية. شاكرين تعاونك!`;
 }
 
 // Helper: Construct Admin Alert Message
 function buildAdminMessage(order: Order, courierName: string, activeCount: number): string {
-  return `🚨 [تنبيه تأخير طلب - لوكيت]\n• رقم الطلب: ${order.id}\n• المندوب: ${courierName}\n• الوقت المنقضي: ${order.elapsedMinutes} دقيقة (الحد المسموح: ${settings.delayThresholdMinutes} دقيقة)\n• عدد الطلبات النشطة بحوزته: ${activeCount} طلبات\n• المطعم: ${order.restaurant}\n• الحي: ${order.customerAddress || 'غير محدد'}\n• الوقت: ${new Date().toLocaleTimeString('ar-SA')}`;
+  return `🚨 [تنبيه تأخير طلب - لوكيت]\n• رقم الطلب: ${order.id}\n• المندوب: ${courierName}\n• الوقت المنقضي: ${order.elapsedMinutes} دقيقة (الحد المسموح: ${settings.delayThresholdMinutes} دقيقة)\n• وقت الاستلام: ${order.pickupTime || 'غير محدد'}\n• عدد الطلبات النشطة بحوزته: ${activeCount} طلبات\n• المطعم: ${order.restaurant}\n• الحي: ${order.customerAddress || 'غير محدد'}\n• الوقت: ${new Date().toLocaleTimeString('ar-SA')}`;
 }
 
 // Helper: Construct Admin 2 Escalation Message upon continued delay
-function buildAdmin2Message(order: Order, courierName: string, activeCount: number): string {
-  return `🚨 [تصعيد تأخير حرج - إشعار الإدارة الثانية]\n• اسم المندوب: ${courierName}\n• رقم الطلب: ${order.id}\n• الوقت المنقضي: ${order.elapsedMinutes} دقيقة\n• عدد الطلبات النشطة بحوزته: ${activeCount} طلبات\n• المطعم: ${order.restaurant}\n• الحي: ${order.customerAddress || 'غير محدد'}\n⚠️ تنبيه: استمر التأخير وتجاوز حد التصعيد الحرج (${settings.criticalDelayMinutes} دقيقة).\nيرجى التدخل والمتابعة المباشرة مع المندوب.`;
+function buildAdmin2Message(order: Order, courierName: string, courierPhone: string, activeCount: number): string {
+  return `🚨 [تصعيد تأخير حرج - إشعار الإدارة الثانية]\n• اسم المندوب: ${courierName}\n• جوال المندوب للتواصل المباشر: ${courierPhone || 'غير مسجل'}\n• رقم الطلب: ${order.id}\n• وقت الاستلام: ${order.pickupTime || 'غير محدد'}\n• الوقت المنقضي: ${order.elapsedMinutes} دقيقة\n• عدد الطلبات النشطة بحوزته: ${activeCount} طلبات\n• المطعم: ${order.restaurant}\n• الحي: ${order.customerAddress || 'غير محدد'}\n⚠️ تنبيه: استمر التأخير وتجاوز حد التصعيد الحرج (${settings.criticalDelayMinutes} دقيقة).\nيرجى التواصل الفوري مع المندوب عبر رقمه لمعرفة أسباب التأخير.`;
 }
 
 // Helper: Enqueue message safely with Anti-Ban delay & Cooldown protection
@@ -413,7 +413,7 @@ function triggerAlertsForOrder(order: Order) {
     settings.autoAlertAdmin2 &&
     settings.adminPhone2
   ) {
-    const admin2Msg = buildAdmin2Message(order, courierName, activeCount);
+    const admin2Msg = buildAdmin2Message(order, courierName, courierPhone, activeCount);
     enqueueAlert('admin2', settings.adminName2 || 'الإدارة الثانية (تصعيد)', settings.adminPhone2, order.id, admin2Msg, order.elapsedMinutes, activeCount);
     order.alertSentToAdmin2 = true;
     order.admin2AlertTime = new Date().toLocaleTimeString('ar-SA', { hour: '2-digit', minute: '2-digit' });
@@ -841,7 +841,7 @@ app.post('/api/alerts/trigger-manual', (req: Request, res: Response) => {
   }
 
   if (target === 'admin2') {
-    const admin2Msg = buildAdmin2Message(order, courierName, activeCount);
+    const admin2Msg = buildAdmin2Message(order, courierName, courierPhone, activeCount);
     const cleanAdmin2 = formatPhoneForWhatsApp(settings.adminPhone2);
     admin2Link = `https://wa.me/${cleanAdmin2}?text=${encodeURIComponent(admin2Msg)}`;
 
