@@ -19,7 +19,7 @@ import {
   QueuedWhatsAppMessage,
   PuppeteerScraperStatus,
   WhatsAppConnectionState,
-} from './src/types.js';
+} from './src/types';
 
 const app = express();
 const PORT = 3000;
@@ -1064,7 +1064,14 @@ async function runPuppeteerScrapeLocat() {
     const puppeteerModule = await import('puppeteer');
     const browser = await puppeteerModule.default.launch({
       headless: true,
-      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu'],
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-gpu',
+        '--no-first-run',
+        '--no-zygote',
+      ],
     });
 
     const page = await browser.newPage();
@@ -1163,7 +1170,7 @@ async function runPuppeteerScrapeLocat() {
       });
     }
   } catch (err: any) {
-    console.warn('[Puppeteer 24/7] فحص Puppeteer:', err.message);
+    console.warn('[Puppeteer 24/7] خطأ Puppeteer:', err.message);
     puppeteerStatus.lastError = err.message;
     puppeteerStatus.status = 'error';
   } finally {
