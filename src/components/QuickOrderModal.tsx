@@ -28,12 +28,12 @@ export const QuickOrderModal: React.FC<QuickOrderModalProps> = ({
   onPasteJson,
 }) => {
   const [tab, setTab] = useState<'single' | 'json'>('single');
-  const [orderId, setOrderId] = useState(`#LOC-${Math.floor(1000 + Math.random() * 9000)}`);
+  const [orderId, setOrderId] = useState('');
   const [courierAccount, setCourierAccount] = useState(couriers[0]?.locatAccounts[0] || '');
-  const [elapsedMinutes, setElapsedMinutes] = useState(32);
-  const [restaurant, setRestaurant] = useState('شاورما وبيرغر ستيشن');
-  const [customerAddress, setCustomerAddress] = useState('حي النرجس');
-  const [activeHeld, setActiveHeld] = useState(2);
+  const [elapsedMinutes, setElapsedMinutes] = useState(0);
+  const [restaurant, setRestaurant] = useState('');
+  const [customerAddress, setCustomerAddress] = useState('');
+  const [activeHeld, setActiveHeld] = useState(1);
   const [jsonText, setJsonText] = useState('');
 
   if (!isOpen) return null;

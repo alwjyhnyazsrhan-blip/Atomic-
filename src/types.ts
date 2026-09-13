@@ -80,6 +80,17 @@ export interface QueuedWhatsAppMessage {
   waLink?: string;
 }
 
+export interface WhatsAppConnectionState {
+  status: 'connected' | 'connecting_qr' | 'disconnected' | 'reconnecting' | 'logged_out';
+  isLoggedIn: boolean;
+  userPhone?: string;
+  userName?: string;
+  qrDataUrl?: string | null;
+  qrRaw?: string | null;
+  lastConnectedAt?: string | null;
+  lastError?: string | null;
+}
+
 export interface PuppeteerScraperStatus {
   enabled: boolean;
   isRunning: boolean;

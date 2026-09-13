@@ -1,7 +1,14 @@
 import express, { Request, Response } from 'express';
 import path from 'path';
+import fs from 'fs';
 import { createServer as createViteServer } from 'vite';
 import QRCode from 'qrcode';
+import pino from 'pino';
+import makeWASocket, {
+  useMultiFileAuthState,
+  DisconnectReason,
+  Browsers,
+} from '@whiskeysockets/baileys';
 import { 
   Courier, 
   Order, 
@@ -10,7 +17,8 @@ import {
   DailyReportSummary, 
   CourierPerformanceItem,
   QueuedWhatsAppMessage,
-  PuppeteerScraperStatus
+  PuppeteerScraperStatus,
+  WhatsAppConnectionState,
 } from './src/types.js';
 
 const app = express();
@@ -49,6 +57,23 @@ let couriers: Courier[] = [];
 let orders: Order[] = [];
 let alerts: AlertLog[] = [];
 
+// --- BAILEYS WHATSAPP ENGINE & PERSISTENT SESSION ---
+const AUTH_DIR = process.env.BAILEYS_AUTH_DIR || path.resolve(process.cwd(), 'baileys_auth_info');
+let sock: any = null;
+let isInitializingBaileys = false;
+let reconnectTimer: NodeJS.Timeout | null = null;
+
+let whatsappState: WhatsAppConnectionState = {
+  status: 'disconnected',
+  isLoggedIn: false,
+  userPhone: undefined,
+  userName: undefined,
+  qrDataUrl: null,
+  qrRaw: null,
+  lastConnectedAt: null,
+  lastError: null,
+};
+
 // --- ANTI-BAN MESSAGE QUEUE & COOLDOWN ENGINE ---
 const alertCooldownMap = new Map<string, number>(); // key: `${orderId}_${recipientType}` -> timestamp ms
 let messageQueue: QueuedWhatsAppMessage[] = [];
@@ -66,6 +91,151 @@ let puppeteerStatus: PuppeteerScraperStatus = {
   status: 'idle',
   lastScrapedCount: 0,
 };
+
+// --- BAILEYS CONNECTION ENGINE & RECOVERY ---
+async function connectToWhatsApp(forceNew: boolean = false) {
+  if (isInitializingBaileys) return;
+  isInitializingBaileys = true;
+
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+
+  if (forceNew) {
+    try {
+      if (sock) {
+        sock.end(undefined);
+        sock = null;
+      }
+      if (fs.existsSync(AUTH_DIR)) {
+        fs.rmSync(AUTH_DIR, { recursive: true, force: true });
+        console.log('[Baileys] تم مسح ملفات الجلسة القديمة بنجاح لبدء جلسة جديدة.');
+      }
+    } catch (err: any) {
+      console.warn('[Baileys] تحذير أثناء تنظيف ملفات الجلسة:', err?.message);
+    }
+  }
+
+  try {
+    if (!fs.existsSync(AUTH_DIR)) {
+      fs.mkdirSync(AUTH_DIR, { recursive: true });
+    }
+
+    const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
+    const hasExistingCreds = fs.existsSync(path.join(AUTH_DIR, 'creds.json'));
+    console.log(`[Baileys Engine] مسار الجلسة: ${AUTH_DIR}`);
+    console.log(`[Baileys Engine] الجلسة المحفوظة: ${hasExistingCreds ? '✅ توجد جلسة سابقة (استعادة تلقائية دون الحاجة لمسح QR)' : '⚠️ لا توجد جلسة سابقة (بانتظار مسح QR Code)'}`);
+
+    whatsappState.status = hasExistingCreds ? 'reconnecting' : 'connecting_qr';
+
+    const makeSocket = typeof makeWASocket === 'function' ? makeWASocket : (makeWASocket as any)?.default;
+    sock = makeSocket({
+      auth: state,
+      logger: pino({ level: 'silent' }),
+      printQRInTerminal: false,
+      browser: Browsers.ubuntu('Chrome'),
+      connectTimeoutMs: 60000,
+      defaultQueryTimeoutMs: 60000,
+    });
+
+    sock.ev.on('creds.update', saveCreds);
+
+    sock.ev.on('connection.update', async (update: any) => {
+      const { connection, lastDisconnect, qr } = update;
+
+      if (qr) {
+        whatsappState.status = 'connecting_qr';
+        whatsappState.qrRaw = qr;
+        try {
+          whatsappState.qrDataUrl = await QRCode.toDataURL(qr, {
+            margin: 2,
+            scale: 7,
+            color: { dark: '#064e3b', light: '#ffffff' },
+          });
+          const terminalQr = await QRCode.toString(qr, { type: 'terminal', small: true });
+          console.log('\n' + '═'.repeat(64));
+          console.log('📱 [Baileys WhatsApp Live QR] تم توليد رمز QR لربط جلسة الواتساب:');
+          console.log('👉 امسح الرمز أدناه من تطبيق واتساب (الأجهزة المرتبطة > ربط جهاز):');
+          console.log('─'.repeat(64));
+          console.log(terminalQr);
+          console.log('═'.repeat(64) + '\n');
+        } catch (err: any) {
+          console.error('[Baileys QR Error]', err?.message);
+        }
+      }
+
+      if (connection === 'open') {
+        whatsappState.status = 'connected';
+        whatsappState.isLoggedIn = true;
+        whatsappState.qrDataUrl = null;
+        whatsappState.qrRaw = null;
+        whatsappState.lastConnectedAt = new Date().toISOString();
+        whatsappState.lastError = null;
+
+        const userJid = sock?.user?.id || '';
+        const phone = userJid.split(':')[0] || userJid.split('@')[0];
+        whatsappState.userPhone = phone;
+        whatsappState.userName = sock?.user?.name || 'واتساب لوكيت المتصل';
+
+        console.log('\n' + '═'.repeat(64));
+        console.log('✅ [Baileys WhatsApp] تم الاتصال والتحقق بنجاح!');
+        console.log(`📱 رقم الحساب المرتبط: ${phone}`);
+        console.log(`💾 تم حفظ الجلسة على السيرفر في: ${AUTH_DIR} (مستقرة ولا تتطلب إعادة مسح)`);
+        console.log('═'.repeat(64) + '\n');
+      }
+
+      if (connection === 'close') {
+        const statusCode = (lastDisconnect?.error as any)?.output?.statusCode;
+        const isLoggedOut = statusCode === DisconnectReason.loggedOut;
+        console.warn(`[Baileys WhatsApp] أُغلق الاتصال (رمز: ${statusCode}). هل هو تسجيل خروج؟ ${isLoggedOut}`);
+
+        if (isLoggedOut) {
+          whatsappState.status = 'logged_out';
+          whatsappState.isLoggedIn = false;
+          whatsappState.qrDataUrl = null;
+          whatsappState.qrRaw = null;
+          whatsappState.userPhone = undefined;
+          try {
+            fs.rmSync(AUTH_DIR, { recursive: true, force: true });
+          } catch (e) {}
+          reconnectTimer = setTimeout(() => connectToWhatsApp(true), 3000);
+        } else {
+          whatsappState.status = 'reconnecting';
+          whatsappState.lastError = (lastDisconnect?.error as any)?.message || 'انقطع الاتصال المؤقت، جاري إعادة المحاولة...';
+          reconnectTimer = setTimeout(() => connectToWhatsApp(false), 5000);
+        }
+      }
+    });
+  } catch (err: any) {
+    console.error('[Baileys Connection Error]', err?.message);
+    whatsappState.status = 'disconnected';
+    whatsappState.lastError = err?.message || 'تعذر تشغيل محرك Baileys';
+    reconnectTimer = setTimeout(() => connectToWhatsApp(false), 8000);
+  } finally {
+    isInitializingBaileys = false;
+  }
+}
+
+// Helper: Send Direct WhatsApp Message via Baileys (with wa.me link fallback)
+async function sendWhatsAppDirect(phone: string, text: string): Promise<{ success: boolean; method: string; waLink: string; error?: string }> {
+  const cleanPhone = formatPhoneForWhatsApp(phone);
+  const waLink = `https://wa.me/${cleanPhone}?text=${encodeURIComponent(text)}`;
+
+  if (sock && whatsappState.isLoggedIn && whatsappState.status === 'connected') {
+    try {
+      const jid = `${cleanPhone}@s.whatsapp.net`;
+      await sock.sendMessage(jid, { text });
+      console.log(`[Baileys Direct] ✅ تم إرسال الرسالة آلياً عبر واتساب إلى ${cleanPhone}`);
+      return { success: true, method: 'baileys_direct', waLink };
+    } catch (err: any) {
+      console.warn(`[Baileys Direct] تعذر الإرسال المباشر (${err?.message})، يتم استخدام رابط wa.me الاحتياطي`);
+      return { success: true, method: 'direct_link_fallback', waLink, error: err?.message };
+    }
+  } else {
+    return { success: true, method: 'direct_link_fallback', waLink };
+  }
+}
 
 // Helper: Match courier by Locat account
 function findCourierByLocatAccount(account: string): Courier | undefined {
@@ -179,8 +349,12 @@ async function processMessageQueue() {
     // Apply random safety delay before sending next message to prevent WhatsApp ban
     await new Promise((res) => setTimeout(res, delayMs));
 
+    // Send directly via Baileys WhatsApp if session is connected, or prepare direct wa.me link
+    const sendResult = await sendWhatsAppDirect(nextItem.recipientPhone, nextItem.message);
+
     nextItem.status = 'sent';
     nextItem.sentAt = new Date().toISOString();
+    nextItem.waLink = sendResult.waLink;
     queueStats.totalProcessed++;
     queueStats.totalSent++;
 
@@ -196,11 +370,11 @@ async function processMessageQueue() {
       activeOrdersCount: 0,
       message: nextItem.message,
       status: 'sent',
-      waLink: nextItem.waLink || '',
+      waLink: sendResult.waLink || nextItem.waLink || '',
       delayAppliedSeconds: nextItem.delayAppliedSeconds,
     });
 
-    console.log(`[Anti-Ban Queue] ✅ تم إرسال تنبيه (${nextItem.recipientType}) بنجاح للطلب ${nextItem.orderId} بفارق أمان ${nextItem.delayAppliedSeconds} ثوانٍ`);
+    console.log(`[Anti-Ban Queue] ✅ تم إرسال تنبيه (${nextItem.recipientType}) للطلب ${nextItem.orderId} (طريقة: ${sendResult.method}) بفارق أمان ${nextItem.delayAppliedSeconds} ثوانٍ`);
   }
 
   isQueueProcessing = false;
@@ -731,144 +905,124 @@ app.post('/api/reports/send-daily', (req: Request, res: Response) => {
   });
 });
 
-// 5b. Direct WhatsApp Alert Test & QR Code Session Generator
+// 5b. Direct WhatsApp Baileys Status & Session Management API
+app.get('/api/whatsapp/status', async (req: Request, res: Response) => {
+  const hasSavedSession = fs.existsSync(path.join(AUTH_DIR, 'creds.json'));
+  let terminalQr = '';
+  if (whatsappState.qrRaw) {
+    try {
+      terminalQr = await QRCode.toString(whatsappState.qrRaw, { type: 'terminal', small: true });
+    } catch (e) {}
+  }
+
+  res.json({
+    success: true,
+    whatsappState,
+    terminalQr,
+    sessionDir: AUTH_DIR,
+    hasSavedSession,
+    cooldownMinutes: settings.alertCooldownMinutes,
+    antiBanMinDelay: settings.antiBanMinDelaySeconds,
+    antiBanMaxDelay: settings.antiBanMaxDelaySeconds,
+  });
+});
+
+app.post('/api/whatsapp/reconnect', async (req: Request, res: Response) => {
+  console.log('[Baileys] إعادة الاتصال / فحص الجلسة...');
+  connectToWhatsApp(false);
+  res.json({
+    success: true,
+    message: 'جاري الاتصال والتحقق من جلسة الواتساب...',
+    whatsappState,
+  });
+});
+
+app.post('/api/whatsapp/logout', async (req: Request, res: Response) => {
+  console.log('[Baileys] تسجيل الخروج ومسح بيانات الجلسة القديمة...');
+  connectToWhatsApp(true);
+  res.json({
+    success: true,
+    message: 'تم مسح ملفات الجلسة وإعادة توليد رمز QR جديد',
+    whatsappState,
+  });
+});
+
+app.post('/api/whatsapp/send-test', async (req: Request, res: Response) => {
+  const { recipientPhone, recipientName = 'مشرف العمليات', message } = req.body;
+  if (!recipientPhone) {
+    res.status(400).json({ success: false, message: 'رقم الهاتف مطلوب لإجراء الاختبار' });
+    return;
+  }
+
+  const cleanPhone = formatPhoneForWhatsApp(recipientPhone);
+  const textToSend = message || `مرحباً ${recipientName}،\nرسالة فحص مباشر من نظام أتمتة ومتابعة لوكيت.\nالتوقيت: ${new Date().toLocaleTimeString('ar-SA')}\n✅ الربط يعمل ومستقر على السيرفر.`;
+  const sendRes = await sendWhatsAppDirect(cleanPhone, textToSend);
+
+  res.json({
+    success: true,
+    message: sendRes.method === 'baileys_direct'
+      ? 'تم إرسال رسالة الفحص آلياً عبر جلسة Baileys على الواتساب بنجاح!'
+      : 'تم تجهيز رابط الإرسال المباشر (wa.me) لعدم اكتمال ربط جلسة Baileys بعد',
+    details: sendRes,
+    textSent: textToSend,
+    recipientPhone: cleanPhone,
+    recipientName,
+  });
+});
+
+// Backward-compatible verification endpoint (pure check, no dummy orders)
 app.post('/api/whatsapp/test-direct', async (req: Request, res: Response) => {
   try {
     const {
       recipientPhone = settings.adminPhone || '966500000000',
       recipientName = settings.adminName || 'مشرف العمليات',
-      orderId = '#LOC-TEST-' + Math.floor(1000 + Math.random() * 9000),
       customMessage,
     } = req.body;
 
-    const sampleOrder: Order = {
-      id: orderId,
-      locatAccount: 'captain_test',
-      courierName: recipientName,
-      courierPhone: recipientPhone,
-      elapsedMinutes: settings.delayThresholdMinutes + 5,
-      activeOrdersHeldByCourier: 2,
-      restaurant: 'شاورما وسلطات لوكيت',
-      customerAddress: 'الرياض - حي العليا',
-      pickupTime: new Date().toLocaleTimeString('ar-SA', { hour: '2-digit', minute: '2-digit' }),
-      status: 'delayed',
-      isDelayed: true,
-      alertSentToCourier: true,
-      alertSentToAdmin: true,
-      lastUpdated: new Date().toISOString(),
-    };
-
-    const messageText = customMessage || buildCourierMessage(sampleOrder, recipientName);
     const cleanPhone = formatPhoneForWhatsApp(recipientPhone);
+    const messageText = customMessage || `السلام عليكم أخي ${recipientName}،\nرسالة فحص مباشر وتأكيد ربط جلسة الواتساب مع نظام أتمتة لوكيت.\nالتوقيت: ${new Date().toLocaleTimeString('ar-SA')}`;
     const directWaLink = `https://wa.me/${cleanPhone}?text=${encodeURIComponent(messageText)}`;
 
-    // Generate WhatsApp Web Session Token / Pairing QR Payload
-    const sessionPayload = `2@${Buffer.from(JSON.stringify({
-      t: Date.now(),
-      platform: 'LocateDispatcher_v2',
-      session: 'sess_' + Math.random().toString(36).substring(2, 10),
-      channel: 'whatsapp_web'
-    })).toString('base64')}`;
-
-    // 1. Generate ASCII QR Code for Terminal console output
     let terminalQr = '';
-    try {
-      terminalQr = await QRCode.toString(sessionPayload, { type: 'terminal', small: true });
-    } catch (e) {
-      terminalQr = '[Terminal QR rendering unavailable]';
+    if (whatsappState.qrRaw) {
+      try {
+        terminalQr = await QRCode.toString(whatsappState.qrRaw, { type: 'terminal', small: true });
+      } catch (e) {}
     }
-
-    // Print distinctly to Terminal / Console
-    console.log('\n' + '═'.repeat(64));
-    console.log('📱 [WhatsApp Dispatcher Engine] اختبار إرسال تنبيه الواتساب المباشر');
-    console.log(`⏰ الوقت: ${new Date().toLocaleTimeString('ar-SA')} | المستلم: ${recipientName} (${recipientPhone})`);
-    console.log(`📝 نص الرسالة:\n${messageText}`);
-    console.log('─'.repeat(64));
-    console.log('⚡ رمز QR لجلسة الواتساب (WhatsApp Pairing Session QR Code):');
-    console.log('👉 امسح الرمز أدناه من تطبيق واتساب (الأجهزة المرتبطة > ربط جهاز):');
-    console.log('─'.repeat(64));
-    console.log(terminalQr);
-    console.log('═'.repeat(64) + '\n');
-
-    // 2. Generate PNG Data URL for Dashboard UI display
-    const qrDataUrl = await QRCode.toDataURL(sessionPayload, {
-      margin: 2,
-      scale: 7,
-      color: {
-        dark: '#064e3b',
-        light: '#ffffff',
-      },
-    });
-
-    // 3. Record in Alerts Log
-    const newAlert: AlertLog = {
-      id: `alt-test-${Date.now()}`,
-      timestamp: new Date().toISOString(),
-      recipientType: 'courier',
-      recipientName,
-      recipientPhone,
-      orderId: sampleOrder.id,
-      elapsedMinutes: sampleOrder.elapsedMinutes,
-      activeOrdersCount: sampleOrder.activeOrdersHeldByCourier,
-      message: messageText,
-      status: 'sent',
-      waLink: directWaLink,
-    };
-    alerts.unshift(newAlert);
 
     res.json({
       success: true,
-      message: 'تم توليد فحص إرسال الواتساب وإخراج رمز الـ QR بنجاح في الـ Terminal واللوحة',
-      terminalPrinted: true,
+      message: 'تم فحص حالة جلسة الواتساب بنجاح',
+      whatsappState,
       terminalQr,
-      qrDataUrl,
-      sessionPayload,
+      qrDataUrl: whatsappState.qrDataUrl,
       directWaLink,
       messageText,
-      recipientPhone,
+      recipientPhone: cleanPhone,
       recipientName,
-      orderId: sampleOrder.id,
+      orderId: 'VERIFY',
     });
   } catch (error: any) {
-    console.error('Error generating WhatsApp QR/Test:', error);
-    res.status(500).json({ success: false, message: 'فشل توليد رمز الـ QR لاختبار الواتساب', error: error?.message });
+    console.error('Error in whatsapp test-direct:', error);
+    res.status(500).json({ success: false, message: 'فشل فحص الواتساب', error: error?.message });
   }
 });
 
 app.get('/api/whatsapp/qr-session', async (req: Request, res: Response) => {
-  try {
-    const sessionPayload = `2@${Buffer.from(JSON.stringify({
-      t: Date.now(),
-      platform: 'LocateDispatcher_v2',
-      session: 'sess_' + Math.random().toString(36).substring(2, 10),
-    })).toString('base64')}`;
-
-    const terminalQr = await QRCode.toString(sessionPayload, { type: 'terminal', small: true });
-
-    console.log('\n' + '═'.repeat(64));
-    console.log('📱 [WhatsApp Dispatcher Engine] تحديث رمز QR لجلسة الواتساب:');
-    console.log(terminalQr);
-    console.log('═'.repeat(64) + '\n');
-
-    const qrDataUrl = await QRCode.toDataURL(sessionPayload, {
-      margin: 2,
-      scale: 7,
-      color: {
-        dark: '#064e3b',
-        light: '#ffffff',
-      },
-    });
-
-    res.json({
-      success: true,
-      qrDataUrl,
-      terminalQr,
-      sessionPayload,
-      timestamp: new Date().toISOString(),
-    });
-  } catch (error: any) {
-    res.status(500).json({ success: false, error: error?.message });
+  let terminalQr = '';
+  if (whatsappState.qrRaw) {
+    try {
+      terminalQr = await QRCode.toString(whatsappState.qrRaw, { type: 'terminal', small: true });
+    } catch (e) {}
   }
+
+  res.json({
+    success: true,
+    whatsappState,
+    qrDataUrl: whatsappState.qrDataUrl,
+    terminalQr,
+    timestamp: new Date().toISOString(),
+  });
 });
 
 // 5.1 Anti-Ban WhatsApp Queue Management API
@@ -1420,6 +1574,11 @@ app.get('/api/automation-script', (req: Request, res: Response) => {
 
 // --- VITE MIDDLEWARE & SERVER STARTUP ---
 async function startServer() {
+  // Start persistent Baileys WhatsApp connection engine
+  connectToWhatsApp().catch((err) => {
+    console.error('[Baileys Startup Error]', err);
+  });
+
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
       server: { middlewareMode: true },

@@ -12,9 +12,10 @@ import {
   Users, 
   ListOrdered, 
   Code,
-  Radio
+  Radio,
+  QrCode
 } from 'lucide-react';
-import { SystemSettings, Order } from '../types';
+import { SystemSettings, Order, WhatsAppConnectionState } from '../types';
 
 interface HeaderProps {
   currentTab: 'orders' | 'couriers' | 'alerts' | 'report' | 'automation';
@@ -27,6 +28,8 @@ interface HeaderProps {
   onAdvanceTime: (mins: number) => void;
   onSendQuickDailyReport: () => void;
   isSyncing: boolean;
+  onOpenWhatsApp?: () => void;
+  whatsappState?: WhatsAppConnectionState | null;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -40,6 +43,8 @@ export const Header: React.FC<HeaderProps> = ({
   onAdvanceTime,
   onSendQuickDailyReport,
   isSyncing,
+  onOpenWhatsApp,
+  whatsappState,
 }) => {
   const delayedOrdersCount = orders.filter((o) => o.isDelayed).length;
 
@@ -98,6 +103,36 @@ export const Header: React.FC<HeaderProps> = ({
                 {settings.adminPhone || 'اضغط لتعيين رقم الإدارة'}
               </strong>
             </button>
+
+            {/* WhatsApp Session / QR Button */}
+            {onOpenWhatsApp && (
+              <button
+                type="button"
+                onClick={onOpenWhatsApp}
+                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition shadow-2xs border ${
+                  whatsappState?.isLoggedIn
+                    ? 'bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border-emerald-300'
+                    : 'bg-amber-50 hover:bg-amber-100 text-amber-800 border-amber-300'
+                }`}
+                title="اضغط لفتح شاشة ربط جلسة الواتساب ورمز الـ QR"
+              >
+                <QrCode className="w-3.5 h-3.5 text-emerald-600" />
+                <span>واتساب:</span>
+                {whatsappState?.isLoggedIn ? (
+                  <span className="flex items-center gap-1">
+                    <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
+                    <span className="font-mono text-emerald-900" dir="ltr">
+                      +{whatsappState.userPhone || 'متصل'}
+                    </span>
+                  </span>
+                ) : (
+                  <span className="flex items-center gap-1 text-amber-900">
+                    <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse"></span>
+                    <span>امسح الـ QR</span>
+                  </span>
+                )}
+              </button>
+            )}
 
             {/* Refresh */}
             <button

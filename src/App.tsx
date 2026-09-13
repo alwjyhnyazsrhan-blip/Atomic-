@@ -8,20 +8,27 @@ import { AutomationScriptView } from './components/AutomationScriptView';
 import { SettingsModal } from './components/SettingsModal';
 import { CourierModal } from './components/CourierModal';
 import { QuickOrderModal } from './components/QuickOrderModal';
-import { Order, Courier, SystemSettings, AlertLog } from './types';
+import { WhatsAppTestModal } from './components/WhatsAppTestModal';
+import { Order, Courier, SystemSettings, AlertLog, WhatsAppConnectionState } from './types';
 import { Bell, CheckCircle2, AlertTriangle, X } from 'lucide-react';
 
 export default function App() {
   const [currentTab, setCurrentTab] = useState<'orders' | 'couriers' | 'alerts' | 'report' | 'automation'>('orders');
   
-  // Data states
+  // Data states (clean initial state, filled only with real data from backend/Locat)
   const [settings, setSettings] = useState<SystemSettings>({
     delayThresholdMinutes: 30,
     criticalDelayMinutes: 45,
-    adminPhone: '+966551234567',
-    adminName: 'إدارة العمليات والتشغيل',
+    adminPhone: '',
+    adminName: '',
+    adminPhone2: '',
+    adminName2: '',
     autoAlertCourier: true,
     autoAlertAdmin: true,
+    autoAlertAdmin2: true,
+    alertCooldownMinutes: 20,
+    antiBanMinDelaySeconds: 5,
+    antiBanMaxDelaySeconds: 10,
     autoDailyReport: true,
     dailyReportTime: '23:00',
     whatsAppProvider: 'direct_chat',
@@ -34,6 +41,7 @@ export default function App() {
   const [orders, setOrders] = useState<Order[]>([]);
   const [couriers, setCouriers] = useState<Courier[]>([]);
   const [alerts, setAlerts] = useState<AlertLog[]>([]);
+  const [whatsappState, setWhatsappState] = useState<WhatsAppConnectionState | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
   const [toastMessage, setToastMessage] = useState<{ type: 'success' | 'alert'; text: string } | null>(null);
 
@@ -42,6 +50,7 @@ export default function App() {
   const [isCourierModalOpen, setIsCourierModalOpen] = useState(false);
   const [courierToEdit, setCourierToEdit] = useState<Courier | null>(null);
   const [isAddOrderOpen, setIsAddOrderOpen] = useState(false);
+  const [isWhatsAppModalOpen, setIsWhatsAppModalOpen] = useState(false);
 
   const showToast = (text: string, type: 'success' | 'alert' = 'success') => {
     setToastMessage({ text, type });
@@ -52,17 +61,19 @@ export default function App() {
   const fetchData = useCallback(async (silent = false) => {
     if (!silent) setIsSyncing(true);
     try {
-      const [settingsRes, couriersRes, ordersRes, alertsRes] = await Promise.all([
-        fetch('/api/settings').then((r) => r.json()),
-        fetch('/api/couriers').then((r) => r.json()),
-        fetch('/api/orders').then((r) => r.json()),
-        fetch('/api/alerts').then((r) => r.json()),
+      const [settingsRes, couriersRes, ordersRes, alertsRes, waRes] = await Promise.all([
+        fetch('/api/settings').then((r) => r.json()).catch(() => ({ success: false })),
+        fetch('/api/couriers').then((r) => r.json()).catch(() => ({ success: false })),
+        fetch('/api/orders').then((r) => r.json()).catch(() => ({ success: false })),
+        fetch('/api/alerts').then((r) => r.json()).catch(() => ({ success: false })),
+        fetch('/api/whatsapp/status').then((r) => r.json()).catch(() => ({ success: false })),
       ]);
 
-      if (settingsRes.success) setSettings(settingsRes.settings);
-      if (couriersRes.success) setCouriers(couriersRes.couriers);
-      if (ordersRes.success) setOrders(ordersRes.orders);
-      if (alertsRes.success) setAlerts(alertsRes.alerts);
+      if (settingsRes?.success) setSettings(settingsRes.settings);
+      if (couriersRes?.success) setCouriers(couriersRes.couriers);
+      if (ordersRes?.success) setOrders(ordersRes.orders);
+      if (alertsRes?.success) setAlerts(alertsRes.alerts);
+      if (waRes?.success && waRes.whatsappState) setWhatsappState(waRes.whatsappState);
     } catch (err) {
       console.error('Failed to sync system data:', err);
     } finally {
@@ -253,6 +264,8 @@ export default function App() {
         onAdvanceTime={handleAdvanceTime}
         onSendQuickDailyReport={handleSendReportToAdmin}
         isSyncing={isSyncing}
+        onOpenWhatsApp={() => setIsWhatsAppModalOpen(true)}
+        whatsappState={whatsappState}
       />
 
       {/* Main Content Area */}
@@ -307,6 +320,17 @@ export default function App() {
       </main>
 
       {/* Modals */}
+      <WhatsAppTestModal
+        isOpen={isWhatsAppModalOpen}
+        onClose={() => {
+          setIsWhatsAppModalOpen(false);
+          fetchData(true);
+        }}
+        settings={settings}
+        couriers={couriers}
+        onAlertGenerated={() => fetchData(true)}
+      />
+
       <SettingsModal
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}
