@@ -78,6 +78,101 @@ export const AutomationScriptView: React.FC<AutomationScriptViewProps> = ({
 
   return (
     <div className="space-y-6">
+      {/* Visual Architectural Workflow (As Requested by User) */}
+      <div className="bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900 text-white p-5 rounded-2xl border border-slate-700 shadow-md">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 border-b border-slate-700/80 pb-4 mb-4">
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping"></span>
+              <h2 className="text-base font-bold text-white flex items-center gap-2">
+                مسار الأتمتة المباشر لشاشة لوكيت (Locate Direct Scraper Flow)
+              </h2>
+            </div>
+            <p className="text-xs text-slate-300 mt-1">
+              الربط المباشر مع منصة <strong>https://supplier.locate.sa/orders</strong> وقراءة البيانات لحظياً وإرسال تنبيهات الواتساب
+            </p>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <a
+              href="https://supplier.locate.sa/orders"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-2 px-3.5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold shadow transition"
+            >
+              <ExternalLink className="w-4 h-4" />
+              <span>فتح صفحة لوكيت المباشرة (supplier.locate.sa/orders)</span>
+            </a>
+
+            <button
+              onClick={async () => {
+                try {
+                  const res = await fetch('/api/puppeteer/trigger', { method: 'POST' });
+                  const data = await res.json();
+                  alert(data.message || 'تم بدء فحص وسحب شاشة لوكيت بالسيرفر');
+                } catch {
+                  alert('حدث خطأ أثناء تشغيل السحب.');
+                }
+              }}
+              className="inline-flex items-center gap-1.5 px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-600 rounded-xl text-xs font-semibold transition"
+            >
+              <Play className="w-3.5 h-3.5 text-emerald-400" />
+              <span>تشغيل السحب السحابي الآن</span>
+            </button>
+          </div>
+        </div>
+
+        {/* The Visual 4-Step Diagram */}
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-3 text-xs">
+          <div className="bg-slate-800/80 p-3 rounded-xl border border-slate-700 flex flex-col justify-between">
+            <div>
+              <div className="text-2xs uppercase tracking-wider text-emerald-400 font-bold mb-1">المصدر 1</div>
+              <div className="font-bold text-white mb-1">صفحة شاشة لوكيت المباشرة</div>
+              <div className="text-slate-400 text-2xs font-mono break-all">supplier.locate.sa/orders</div>
+            </div>
+            <div className="text-emerald-300 text-2xs mt-2 font-medium">مفتوحة ومسجلة الدخول</div>
+          </div>
+
+          <div className="bg-slate-800/80 p-3 rounded-xl border border-slate-700 flex flex-col justify-between">
+            <div>
+              <div className="text-2xs uppercase tracking-wider text-purple-400 font-bold mb-1">المرحلة 2</div>
+              <div className="font-bold text-white mb-1">سكربت سحب البيانات</div>
+              <div className="text-slate-300 text-2xs">
+                يقرأ: رقم الطلب • المندوب • الوقت المنقضي • عدد الطلبات النشطة
+              </div>
+            </div>
+            <div className="text-purple-300 text-2xs mt-2 font-medium">مزامنة دورية كل 30 ثانية</div>
+          </div>
+
+          <div className="bg-slate-800/80 p-3 rounded-xl border border-slate-700 flex flex-col justify-between">
+            <div>
+              <div className="text-2xs uppercase tracking-wider text-blue-400 font-bold mb-1">المرحلة 3</div>
+              <div className="font-bold text-white mb-1">لوحة التحكم المركزية</div>
+              <div className="text-slate-300 text-2xs">
+                مطابقة حساب المندوب بـ "رقم الواتساب الفعلي" وفحص حدود التأخير
+              </div>
+            </div>
+            <div className="text-blue-300 text-2xs mt-2 font-medium">منطق التصعيد والحماية</div>
+          </div>
+
+          <div className="bg-emerald-950/70 p-3 rounded-xl border border-emerald-700/70 flex flex-col justify-between">
+            <div>
+              <div className="text-2xs uppercase tracking-wider text-emerald-400 font-bold mb-1">المخرجات 4</div>
+              <div className="font-bold text-white mb-1">تنبيهات فورية بالواتساب</div>
+              <div className="text-emerald-200 text-2xs space-y-0.5">
+                <div>• تنبيه مباشر للمندوب المتأخر</div>
+                <div>• إشعار الإدارة 1 و 2 (رقمك الثاني)</div>
+                <div>• تقرير يومي تحليلي شامل</div>
+              </div>
+            </div>
+            <div className="text-emerald-400 text-2xs mt-2 font-bold flex items-center gap-1">
+              <CheckCircle2 className="w-3.5 h-3.5" />
+              <span>مباشر عبر Baileys QR</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
       {/* Top Banner */}
       <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-2xs flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
