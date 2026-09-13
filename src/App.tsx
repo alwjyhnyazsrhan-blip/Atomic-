@@ -10,7 +10,7 @@ import { CourierModal } from './components/CourierModal';
 import { QuickOrderModal } from './components/QuickOrderModal';
 import { WhatsAppTestModal } from './components/WhatsAppTestModal';
 import { GuideWalkthroughModal } from './components/GuideWalkthroughModal';
-import { Order, Courier, SystemSettings, AlertLog, WhatsAppConnectionState } from './types';
+import { Order, Courier, SystemSettings, AlertLog, WhatsAppConnectionState, CloudSyncState } from './types';
 import { Bell, CheckCircle2, AlertTriangle, X } from 'lucide-react';
 
 export default function App() {
@@ -43,6 +43,7 @@ export default function App() {
   const [couriers, setCouriers] = useState<Courier[]>([]);
   const [alerts, setAlerts] = useState<AlertLog[]>([]);
   const [whatsappState, setWhatsappState] = useState<WhatsAppConnectionState | null>(null);
+  const [cloudSyncState, setCloudSyncState] = useState<CloudSyncState | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
   const [toastMessage, setToastMessage] = useState<{ type: 'success' | 'alert'; text: string } | null>(null);
 
@@ -64,12 +65,13 @@ export default function App() {
   const fetchData = useCallback(async (silent = false) => {
     if (!silent) setIsSyncing(true);
     try {
-      const [settingsRes, couriersRes, ordersRes, alertsRes, waRes] = await Promise.all([
+      const [settingsRes, couriersRes, ordersRes, alertsRes, waRes, cloudRes] = await Promise.all([
         fetch('/api/settings').then((r) => r.json()).catch(() => ({ success: false })),
         fetch('/api/couriers').then((r) => r.json()).catch(() => ({ success: false })),
         fetch('/api/orders').then((r) => r.json()).catch(() => ({ success: false })),
         fetch('/api/alerts').then((r) => r.json()).catch(() => ({ success: false })),
         fetch('/api/whatsapp/status').then((r) => r.json()).catch(() => ({ success: false })),
+        fetch('/api/locat/cloud-status').then((r) => r.json()).catch(() => ({ success: false })),
       ]);
 
       if (settingsRes?.success) setSettings(settingsRes.settings);
@@ -77,12 +79,31 @@ export default function App() {
       if (ordersRes?.success) setOrders(ordersRes.orders);
       if (alertsRes?.success) setAlerts(alertsRes.alerts);
       if (waRes?.success && waRes.whatsappState) setWhatsappState(waRes.whatsappState);
+      if (cloudRes?.success && cloudRes.cloudSyncState) setCloudSyncState(cloudRes.cloudSyncState);
     } catch (err) {
       console.error('Failed to sync system data:', err);
     } finally {
       if (!silent) setIsSyncing(false);
     }
   }, []);
+
+  const handleTriggerCloudSync = async () => {
+    setIsSyncing(true);
+    try {
+      const res = await fetch('/api/locat/cloud-sync-now', { method: 'POST' });
+      const data = await res.json();
+      if (data.success) {
+        showToast(data.message, 'success');
+      } else {
+        showToast(data.message, 'alert');
+      }
+      fetchData(true);
+    } catch {
+      showToast('تعذر إجراء السحب الفوري', 'alert');
+    } finally {
+      setIsSyncing(false);
+    }
+  };
 
   useEffect(() => {
     fetchData();
@@ -269,6 +290,7 @@ export default function App() {
         isSyncing={isSyncing}
         onOpenWhatsApp={() => setIsWhatsAppModalOpen(true)}
         whatsappState={whatsappState}
+        cloudSyncState={cloudSyncState}
         onOpenGuide={() => setIsGuideOpen(true)}
       />
 
@@ -282,6 +304,9 @@ export default function App() {
             onTriggerManualAlert={handleTriggerManualAlert}
             onOpenAddOrderModal={() => setIsAddOrderOpen(true)}
             onAdvanceTime={handleAdvanceTime}
+            cloudSyncState={cloudSyncState}
+            onTriggerCloudSync={handleTriggerCloudSync}
+            onOpenSettings={() => setIsSettingsOpen(true)}
           />
         )}
 

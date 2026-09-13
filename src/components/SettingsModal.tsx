@@ -49,9 +49,119 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [locatePassword, setLocatePassword] = useState(settings.locatePassword || '');
   const [autoDailyReport, setAutoDailyReport] = useState(settings.autoDailyReport ?? true);
   const [dailyReportTime, setDailyReportTime] = useState(settings.dailyReportTime || '23:00');
-  const [syncInterval, setSyncInterval] = useState(settings.locatSyncIntervalSeconds || 30);
+  const [syncInterval, setSyncInterval] = useState(settings.locatSyncIntervalSeconds || 20);
+
+  // Cloud Auto-Sync (Direct 24/7 API without intervention)
+  const [enableCloudAutoSync, setEnableCloudAutoSync] = useState(settings.enableCloudAutoSync ?? true);
+  const [locateEmail, setLocateEmail] = useState(settings.locateEmail || settings.locateUsername || '');
+  const [locateCompanyId, setLocateCompanyId] = useState(settings.locateCompanyId || '');
+  const [locateAccessToken, setLocateAccessToken] = useState(settings.locateAccessToken || '');
+  const [companies, setCompanies] = useState<{ id: string | number; name?: string }[]>([]);
+  const [isCheckingEmail, setIsCheckingEmail] = useState(false);
+  const [isTestingCloudLogin, setIsTestingCloudLogin] = useState(false);
+  const [isSyncingNow, setIsSyncingNow] = useState(false);
+  const [cloudFeedback, setCloudFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
   if (!isOpen) return null;
+
+  const handleCheckEmailAndCompanies = async () => {
+    if (!locateEmail.trim()) {
+      setCloudFeedback({ type: 'error', message: 'يرجى إدخال البريد الإلكتروني للوكيت أولاً' });
+      return;
+    }
+    setIsCheckingEmail(true);
+    setCloudFeedback(null);
+    try {
+      const res = await fetch('/api/locat/cloud-pre-login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: locateEmail.trim() }),
+      });
+      const data = await res.json();
+      if (data.success && Array.isArray(data.companies) && data.companies.length > 0) {
+        setCompanies(data.companies);
+        if (!locateCompanyId && data.companies[0]?.id) {
+          setLocateCompanyId(String(data.companies[0].id));
+        }
+        setCloudFeedback({
+          type: 'success',
+          message: `تم العثور على ${data.companies.length} شركة/فرع لحسابك في لوكيت`,
+        });
+      } else {
+        setCloudFeedback({
+          type: 'error',
+          message: data.message || 'لم يتم العثور على شركات تابعة لهذا البريد في لوكيت',
+        });
+      }
+    } catch {
+      setCloudFeedback({ type: 'error', message: 'فشل الاتصال بسيرفر لوكيت' });
+    } finally {
+      setIsCheckingEmail(false);
+    }
+  };
+
+  const handleTestCloudLogin = async () => {
+    if (!locateEmail.trim() || !locatePassword.trim()) {
+      setCloudFeedback({ type: 'error', message: 'يرجى إدخال البريد الإلكتروني وكلمة المرور' });
+      return;
+    }
+    setIsTestingCloudLogin(true);
+    setCloudFeedback(null);
+    try {
+      const res = await fetch('/api/locat/cloud-login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: locateEmail.trim(),
+          password: locatePassword.trim(),
+          company_id: locateCompanyId.trim() || undefined,
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setCloudFeedback({
+          type: 'success',
+          message: `✅ تم تسجيل الدخول واختبار السحب التلقائي بنجاح! تم سحب ${data.syncResult?.count || 0} طلب.`,
+        });
+        if (data.cloudSyncState?.token) {
+          setLocateAccessToken(data.cloudSyncState.token);
+        }
+      } else {
+        setCloudFeedback({
+          type: 'error',
+          message: data.message || 'فشل تسجيل الدخول إلى لوكيت',
+        });
+      }
+    } catch {
+      setCloudFeedback({ type: 'error', message: 'فشل الاتصال بخادم تسجيل الدخول' });
+    } finally {
+      setIsTestingCloudLogin(false);
+    }
+  };
+
+  const handleManualSyncNow = async () => {
+    setIsSyncingNow(true);
+    setCloudFeedback(null);
+    try {
+      const res = await fetch('/api/locat/cloud-sync-now', { method: 'POST' });
+      const data = await res.json();
+      if (data.success) {
+        setCloudFeedback({
+          type: 'success',
+          message: `✅ ${data.message} (إجمالي الطلبات النشطة: ${data.ordersCount})`,
+        });
+      } else {
+        setCloudFeedback({
+          type: 'error',
+          message: data.message || 'تعذر سحب البيانات',
+        });
+      }
+    } catch {
+      setCloudFeedback({ type: 'error', message: 'فشل تنفيذ عملية السحب الفوري' });
+    } finally {
+      setIsSyncingNow(false);
+    }
+  };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -71,9 +181,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       enablePuppeteerHeadless,
       locateUsername: locateUsername.trim(),
       locatePassword: locatePassword.trim(),
+      locateEmail: locateEmail.trim(),
+      locateCompanyId: locateCompanyId.trim(),
+      locateAccessToken: locateAccessToken.trim(),
+      enableCloudAutoSync,
       autoDailyReport,
       dailyReportTime,
-      locatSyncIntervalSeconds: Number(syncInterval) || 30,
+      locatSyncIntervalSeconds: Number(syncInterval) || 20,
     });
     onClose();
   };
@@ -303,59 +417,176 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </div>
           </div>
 
-          {/* Section 4: 24/7 Linux VPS & Puppeteer Headless Engine */}
-          <div className="space-y-3 bg-indigo-50/50 p-4 rounded-xl border border-indigo-200">
+          {/* Section 4: 24/7 Direct Cloud Auto-Sync Engine (Zero-Touch) */}
+          <div className="space-y-3 bg-emerald-50/70 p-4 rounded-xl border border-emerald-300">
             <div className="flex items-center justify-between">
               <h3 className="font-bold text-slate-900 text-sm flex items-center gap-2">
-                <Server className="w-4 h-4 text-indigo-600" />
-                تشغيل الخادم الخفي 24/7 على Linux VPS
+                <Zap className="w-4 h-4 text-emerald-600" />
+                محرك السحب السحابي المباشر 24/7 (بدون أي تدخل منك)
               </h3>
-              <span className="px-2 py-0.5 bg-indigo-100 text-indigo-800 rounded font-mono text-[10px] font-bold">
-                Baileys + Puppeteer
+              <span className="px-2 py-0.5 bg-emerald-100 text-emerald-800 rounded-full font-bold text-[10px]">
+                سحابي تلقائي 24/7
               </span>
             </div>
             
-            <p className="text-slate-600 leading-relaxed">
-              يعمل الخادم عبر <strong>@whiskeysockets/baileys</strong> لمسح QR Code لمرة واحدة دون اشتراكات شهرية، مع محرك <strong>Puppeteer</strong> لسحب طلبات لوكيت آلياً دون الحاجة لفتح اللابتوب.
+            <p className="text-slate-600 leading-relaxed text-[11px]">
+              يقوم الخادم بالاتصال المباشر بسيرفرات لوكيت (supplier.locate.sa) وسحب الطلبات النشطة وتحديث حالة المناديب وتنبيهات التأخير لحظة بلحظة <strong>تلقائياً في الخلفية بدون الحاجة لفتح المتصفح أو أي إضافات</strong>.
             </p>
 
-            <label className="flex items-center justify-between p-2.5 bg-white rounded-lg border border-indigo-200 cursor-pointer hover:bg-indigo-50/50 transition">
+            {/* Cloud Auto-Sync Toggle */}
+            <label className="flex items-center justify-between p-2.5 bg-white rounded-lg border border-emerald-200 cursor-pointer hover:bg-emerald-50/50 transition">
               <div>
                 <div className="font-bold text-slate-800 flex items-center gap-1.5">
-                  <Bot className="w-4 h-4 text-indigo-600" />
-                  <span>تفعيل محرك Puppeteer Headless لسحب الطلبات تلقائياً</span>
+                  <Bot className="w-4 h-4 text-emerald-600" />
+                  <span>تفعيل السحب التلقائي المستمر في الخلفية (24/7 Cloud Sync)</span>
                 </div>
-                <div className="text-[11px] text-slate-500">
-                  يتصفح صفحة supplier.locate.sa/orders دورياً في الخلفية ويسحب البيانات مباشرة إلى الخادم
+                <div className="text-[10px] text-slate-500">
+                  فحص وسحب الطلبات الجديدة كل {syncInterval} ثانية آلياً وتوليد رسائل الواتساب فوراً
                 </div>
               </div>
               <input
                 type="checkbox"
-                checked={enablePuppeteerHeadless}
-                onChange={(e) => setEnablePuppeteerHeadless(e.target.checked)}
-                className="w-4 h-4 text-indigo-600 rounded focus:ring-indigo-500"
+                checked={enableCloudAutoSync}
+                onChange={(e) => setEnableCloudAutoSync(e.target.checked)}
+                className="w-4 h-4 text-emerald-600 rounded focus:ring-emerald-500"
               />
             </label>
 
-            {enablePuppeteerHeadless && (
-              <div className="p-3 bg-white rounded-lg border border-indigo-200 space-y-2 animate-in fade-in duration-150">
-                <div className="text-[11px] font-bold text-slate-700">بيانات الدخول للوكيت (اختياري، في حال طلب إعادة تسجيل الدخول بالـ VPS):</div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                  <input
-                    type="text"
-                    value={locateUsername}
-                    onChange={(e) => setLocateUsername(e.target.value)}
-                    placeholder="اسم المستخدم / البريد في لوكيت"
-                    className="w-full text-xs px-2.5 py-1.5 bg-slate-50 border border-slate-300 rounded-md"
-                  />
-                  <input
-                    type="password"
-                    value={locatePassword}
-                    onChange={(e) => setLocatePassword(e.target.value)}
-                    placeholder="كلمة المرور في لوكيت"
-                    className="w-full text-xs px-2.5 py-1.5 bg-slate-50 border border-slate-300 rounded-md"
-                  />
+            {enableCloudAutoSync && (
+              <div className="p-3 bg-white rounded-lg border border-emerald-200 space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-slate-800">بيانات حسابك في لوكيت (Locate Supplier Credentials):</span>
+                  <button
+                    type="button"
+                    onClick={handleManualSyncNow}
+                    disabled={isSyncingNow}
+                    className="inline-flex items-center gap-1 text-[11px] font-bold px-2 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded transition shadow-2xs disabled:opacity-50"
+                  >
+                    <Zap className={`w-3 h-3 ${isSyncingNow ? 'animate-spin' : ''}`} />
+                    <span>{isSyncingNow ? 'جاري السحب...' : 'سحب تجريبي الآن'}</span>
+                  </button>
                 </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-600 mb-0.5">
+                      البريد الإلكتروني في لوكيت:
+                    </label>
+                    <div className="flex items-center gap-1">
+                      <input
+                        type="email"
+                        value={locateEmail}
+                        onChange={(e) => setLocateEmail(e.target.value)}
+                        placeholder="supplier@example.com"
+                        className="w-full text-xs px-2.5 py-1.5 bg-slate-50 border border-slate-300 rounded-md focus:outline-none focus:border-emerald-500 font-mono"
+                        dir="ltr"
+                      />
+                      <button
+                        type="button"
+                        onClick={handleCheckEmailAndCompanies}
+                        disabled={isCheckingEmail}
+                        className="text-[10px] whitespace-nowrap font-bold px-2 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded border border-slate-300 transition shrink-0 disabled:opacity-50"
+                        title="التحقق من البريد واستخراج الشركات"
+                      >
+                        {isCheckingEmail ? 'فحص...' : 'فحص الحساب'}
+                      </button>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-600 mb-0.5">
+                      كلمة المرور:
+                    </label>
+                    <input
+                      type="password"
+                      value={locatePassword}
+                      onChange={(e) => setLocatePassword(e.target.value)}
+                      placeholder="••••••••"
+                      className="w-full text-xs px-2.5 py-1.5 bg-slate-50 border border-slate-300 rounded-md focus:outline-none focus:border-emerald-500 font-mono"
+                      dir="ltr"
+                    />
+                  </div>
+                </div>
+
+                {/* Company / Branch Selector if available */}
+                {companies.length > 0 && (
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-600 mb-0.5">
+                      اختر فرع / شركة الحساب:
+                    </label>
+                    <select
+                      value={locateCompanyId}
+                      onChange={(e) => setLocateCompanyId(e.target.value)}
+                      className="w-full text-xs px-2.5 py-1.5 bg-slate-50 border border-emerald-300 rounded-md focus:outline-none"
+                    >
+                      {companies.map((comp) => (
+                        <option key={comp.id} value={comp.id}>
+                          {comp.name || `شركة رقم #${comp.id}`}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+
+                {/* Test Login & Connect Button */}
+                <div className="flex flex-wrap items-center gap-2 pt-1">
+                  <button
+                    type="button"
+                    onClick={handleTestCloudLogin}
+                    disabled={isTestingCloudLogin || !locateEmail || !locatePassword}
+                    className="inline-flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg transition shadow-2xs disabled:opacity-50"
+                  >
+                    <Server className={`w-3.5 h-3.5 ${isTestingCloudLogin ? 'animate-spin' : ''}`} />
+                    <span>{isTestingCloudLogin ? 'جاري الاتصال والتحقق...' : 'تسجيل الدخول وربط السحب التلقائي'}</span>
+                  </button>
+
+                  <div className="flex items-center gap-1.5 text-[11px] text-slate-600">
+                    <span>فترة السحب التلقائي:</span>
+                    <select
+                      value={syncInterval}
+                      onChange={(e) => setSyncInterval(Number(e.target.value))}
+                      className="text-xs px-2 py-1 bg-slate-50 border border-slate-300 rounded font-bold"
+                    >
+                      <option value={15}>كل 15 ثانية</option>
+                      <option value={20}>كل 20 ثانية (موصى به)</option>
+                      <option value={30}>كل 30 ثانية</option>
+                      <option value={60}>كل دقيقة</option>
+                    </select>
+                  </div>
+                </div>
+
+                {/* Feedback Toast Banner */}
+                {cloudFeedback && (
+                  <div
+                    className={`p-2.5 rounded-lg text-xs font-medium border animate-in fade-in duration-150 ${
+                      cloudFeedback.type === 'success'
+                        ? 'bg-emerald-50 text-emerald-900 border-emerald-200'
+                        : 'bg-rose-50 text-rose-900 border-rose-200'
+                    }`}
+                  >
+                    {cloudFeedback.message}
+                  </div>
+                )}
+
+                {/* Direct Token Fallback Input (Optional) */}
+                <details className="text-[10px] text-slate-500 pt-1">
+                  <summary className="cursor-pointer font-bold hover:text-slate-800">
+                    أو إدخال رمز التفويض السحابي مباشرة (Direct Bearer Token)
+                  </summary>
+                  <div className="mt-2 space-y-1.5">
+                    <input
+                      type="text"
+                      value={locateAccessToken}
+                      onChange={(e) => setLocateAccessToken(e.target.value)}
+                      placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+                      className="w-full text-xs px-2.5 py-1.5 bg-slate-50 border border-slate-300 rounded font-mono text-[10px]"
+                      dir="ltr"
+                    />
+                    <span className="text-[9px] text-slate-400 block">
+                      يمكنك نسخ رمز الـ Token مباشرة من طلبات شبكة متصفح لوكيت (Authorization: Bearer) إذا كنت تفضل عدم حفظ كلمة المرور.
+                    </span>
+                  </div>
+                </details>
               </div>
             )}
           </div>

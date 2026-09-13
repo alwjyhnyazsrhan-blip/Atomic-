@@ -60,8 +60,31 @@ export interface SystemSettings {
   enablePuppeteerHeadless: boolean; // Run headless puppeteer 24/7 on VPS
   locateUsername?: string; // Credentials for headless Locate login
   locatePassword?: string;
+  locateEmail?: string; // Direct Locate Supplier Email
+  locateCompanyId?: string; // Company / Branch ID in Locate
+  locateAccessToken?: string; // Bearer token for direct cloud API sync
+  enableCloudAutoSync?: boolean; // 24/7 background automatic fetcher
+  lastCloudSyncTimestamp?: string;
+  lastCloudSyncCount?: number;
   baileysStatus?: 'connected' | 'connecting' | 'disconnected' | 'qr_ready';
   baileysPhone?: string;
+}
+
+export interface CloudSyncState {
+  isActive: boolean;
+  isConfigured?: boolean;
+  status: 'idle' | 'syncing' | 'connected' | 'error' | 'unauthenticated';
+  lastSyncTime?: string;
+  lastCount: number;
+  lastOrdersCount?: number;
+  lastCouriersCount?: number;
+  activeOrdersCount?: number;
+  lastError?: string;
+  hasCredentials: boolean;
+  hasToken: boolean;
+  email?: string;
+  companyId?: string;
+  nextSyncSecondsRemaining?: number;
 }
 
 export interface QueuedWhatsAppMessage {

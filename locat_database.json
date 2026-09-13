@@ -1,5 +1,35 @@
 {
   "couriers": [],
   "orders": [],
-  "alerts": []
+  "alerts": [],
+  "settings": {
+    "delayThresholdMinutes": 30,
+    "criticalDelayMinutes": 45,
+    "adminPhone": "",
+    "adminName": "",
+    "adminPhone2": "",
+    "adminName2": "",
+    "autoAlertCourier": true,
+    "autoAlertAdmin": true,
+    "autoAlertAdmin2": true,
+    "alertCooldownMinutes": 20,
+    "antiBanMinDelaySeconds": 5,
+    "antiBanMaxDelaySeconds": 10,
+    "autoDailyReport": true,
+    "dailyReportTime": "23:00",
+    "whatsAppProvider": "direct_chat",
+    "webhookUrl": "",
+    "webhookApiKey": "",
+    "locatSyncIntervalSeconds": 20,
+    "locatApiKey": "locat_secret_key_8892",
+    "enablePuppeteerHeadless": false,
+    "locateUsername": "",
+    "locatePassword": "wwx5531",
+    "locateEmail": "waleed.solaiman99@gmail.com",
+    "locateCompanyId": "66d8ab5a029f4200544c927d",
+    "locateAccessToken": "eyJhbGciOiJIUzI1NiJ9.NjZlMzEwYTMzNmJiMzYwMDU0YTQxNGNj.I1YWl8iFfLN8c_0dWKEBnkwFHRLSYIlbNA6Pz2CBVDQ",
+    "enableCloudAutoSync": true,
+    "lastCloudSyncTimestamp": "2026-09-13T21:46:57.728Z",
+    "lastCloudSyncCount": 0
+  }
 }

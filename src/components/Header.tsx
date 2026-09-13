@@ -16,7 +16,7 @@ import {
   QrCode,
   Play
 } from 'lucide-react';
-import { SystemSettings, Order, WhatsAppConnectionState } from '../types';
+import { SystemSettings, Order, WhatsAppConnectionState, CloudSyncState } from '../types';
 
 interface HeaderProps {
   currentTab: 'orders' | 'couriers' | 'alerts' | 'report' | 'automation';
@@ -31,6 +31,7 @@ interface HeaderProps {
   isSyncing: boolean;
   onOpenWhatsApp?: () => void;
   whatsappState?: WhatsAppConnectionState | null;
+  cloudSyncState?: CloudSyncState | null;
   onOpenGuide?: () => void;
 }
 
@@ -47,6 +48,7 @@ export const Header: React.FC<HeaderProps> = ({
   isSyncing,
   onOpenWhatsApp,
   whatsappState,
+  cloudSyncState,
   onOpenGuide,
 }) => {
   const delayedOrdersCount = orders.filter((o) => o.isDelayed).length;
@@ -66,10 +68,21 @@ export const Header: React.FC<HeaderProps> = ({
                 <h1 className="text-lg font-bold text-slate-900 leading-tight">
                   نظام أتمتة ومتابعة لوكيت
                 </h1>
-                <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-                  متصل بـ Locat Live
-                </span>
+                {cloudSyncState?.isConfigured ? (
+                  <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                    سحب سحابي مباشر 24/7
+                  </span>
+                ) : (
+                  <button
+                    onClick={onOpenSettings}
+                    className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-amber-50 text-amber-800 border border-amber-200 hover:bg-amber-100 transition cursor-pointer"
+                    title="اضغط لربط حساب لوكيت وتفعيل السحب التلقائي"
+                  >
+                    <span className="w-1.5 h-1.5 rounded-full bg-amber-500"></span>
+                    <span>ربط السحب التلقائي</span>
+                  </button>
+                )}
               </div>
               <p className="text-xs text-slate-500">
                 المراقبة اللحظية للطلبات، تنبيهات التأخير الآلية للواتساب، والتقارير اليومية

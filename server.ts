@@ -19,13 +19,11 @@ import {
   QueuedWhatsAppMessage,
   PuppeteerScraperStatus,
   WhatsAppConnectionState,
+  CloudSyncState,
 } from './src/types';
 
 const app = express();
 const PORT = 3000;
-
-// Set Puppeteer Cache Dir so that Render and cloud hosts locate the downloaded Chrome in .cache/puppeteer
-process.env.PUPPETEER_CACHE_DIR = process.env.PUPPETEER_CACHE_DIR || path.join(process.cwd(), '.cache', 'puppeteer');
 
 app.use(express.json());
 
@@ -48,11 +46,25 @@ let settings: SystemSettings = {
   whatsAppProvider: 'direct_chat', // direct_chat (wa.me) / webhook
   webhookUrl: '',
   webhookApiKey: '',
-  locatSyncIntervalSeconds: 30,
+  locatSyncIntervalSeconds: 20,
   locatApiKey: 'locat_secret_key_8892',
-  enablePuppeteerHeadless: false, // تشغيل المتصفح الخفي 24/7 على VPS
+  enablePuppeteerHeadless: false,
   locateUsername: '',
   locatePassword: '',
+  locateEmail: '',
+  locateCompanyId: '',
+  locateAccessToken: '',
+  enableCloudAutoSync: true, // سحب تلقائي سحابي مباشر 24/7
+  lastCloudSyncTimestamp: undefined,
+  lastCloudSyncCount: 0,
+};
+
+let cloudSyncState: CloudSyncState = {
+  isActive: true,
+  status: 'idle',
+  lastCount: 0,
+  hasCredentials: false,
+  hasToken: false,
 };
 
 // --- FILE PERSISTENCE (Saves couriers, orders, settings across restarts) ---
@@ -662,11 +674,17 @@ app.post('/api/settings', (req: Request, res: Response) => {
     enablePuppeteerHeadless: body.enablePuppeteerHeadless !== undefined ? Boolean(body.enablePuppeteerHeadless) : settings.enablePuppeteerHeadless,
     locateUsername: body.locateUsername !== undefined ? body.locateUsername : settings.locateUsername,
     locatePassword: body.locatePassword !== undefined ? body.locatePassword : settings.locatePassword,
+    locateEmail: body.locateEmail !== undefined ? body.locateEmail : settings.locateEmail,
+    locateCompanyId: body.locateCompanyId !== undefined ? body.locateCompanyId : settings.locateCompanyId,
+    locateAccessToken: body.locateAccessToken !== undefined ? body.locateAccessToken : settings.locateAccessToken,
+    enableCloudAutoSync: body.enableCloudAutoSync !== undefined ? Boolean(body.enableCloudAutoSync) : settings.enableCloudAutoSync,
+    locatSyncIntervalSeconds: Number(body.locatSyncIntervalSeconds) || settings.locatSyncIntervalSeconds,
   };
 
   puppeteerStatus.enabled = settings.enablePuppeteerHeadless;
 
-  // Reconfigure 24/7 automated Puppeteer background scraper
+  // Reconfigure 24/7 automated Cloud Auto-Sync and Puppeteer runners
+  setupCloudAutoSyncRunner();
   setupPuppeteer247Runner();
 
   // Re-evaluate current orders delay state based on new threshold
@@ -799,24 +817,11 @@ app.get('/api/orders', (req: Request, res: Response) => {
   res.json({ success: true, orders, delayThreshold: settings.delayThresholdMinutes });
 });
 
-// POST /api/locat/sync: The core ingestion endpoint called by the Locat Automation Script
-app.post('/api/locat/sync', (req: Request, res: Response) => {
-  const { liveOrders, secretKey } = req.body;
-
-  if (settings.locatApiKey && secretKey && secretKey !== settings.locatApiKey) {
-    res.status(401).json({ success: false, message: 'مفتاح المزامنة غير صالح' });
-    return;
-  }
-
-  if (!Array.isArray(liveOrders)) {
-    res.status(400).json({ success: false, message: 'صيغة البيانات غير صحيحة - يجب إرسال قائمة liveOrders' });
-    return;
-  }
-
+// Helper: Common ingestion and alert evaluation function for orders from any source
+function ingestLiveOrders(liveOrders: any[], sourceName: string = 'Locat'): { count: number; alertsGenerated: number; newlyDelayedCount: number } {
   let newlyDelayedCount = 0;
   let alertsGenerated = 0;
 
-  // Process and merge live orders from Locat
   liveOrders.forEach((incoming: any) => {
     const orderId = incoming.id || incoming.orderId || `#LOC-${Math.floor(1000 + Math.random() * 9000)}`;
     const locatAccount = incoming.locatAccount || incoming.courierAccount || incoming.driverId || '';
@@ -825,7 +830,6 @@ app.post('/api/locat/sync', (req: Request, res: Response) => {
 
     const matchedCourier = findCourierForOrder(locatAccount, incoming.courierName, incoming.courierId, incoming.courierPhone);
 
-    // Find if order already tracked
     const existingIndex = orders.findIndex((o) => o.id === orderId);
 
     if (existingIndex !== -1) {
@@ -877,13 +881,39 @@ app.post('/api/locat/sync', (req: Request, res: Response) => {
     }
   });
 
+  // Re-calculate active orders count for all couriers
+  couriers.forEach((c) => {
+    c.activeOrdersCount = orders.filter((o) => {
+      const match = findCourierForOrder(o.locatAccount, o.courierName, o.courierId, o.courierPhone);
+      return match ? match.id === c.id : false;
+    }).length;
+  });
+
   saveStoreToDisk();
+  return { count: liveOrders.length, alertsGenerated, newlyDelayedCount };
+}
+
+// POST /api/locat/sync: The ingestion endpoint called by the Locat Automation Script
+app.post('/api/locat/sync', (req: Request, res: Response) => {
+  const { liveOrders, secretKey } = req.body;
+
+  if (settings.locatApiKey && secretKey && secretKey !== settings.locatApiKey) {
+    res.status(401).json({ success: false, message: 'مفتاح المزامنة غير صالح' });
+    return;
+  }
+
+  if (!Array.isArray(liveOrders)) {
+    res.status(400).json({ success: false, message: 'صيغة البيانات غير صحيحة - يجب إرسال قائمة liveOrders' });
+    return;
+  }
+
+  const result = ingestLiveOrders(liveOrders, 'Tampermonkey Script');
 
   res.json({
     success: true,
-    message: `تمت المزامنة بنجاح من لوكيت: تم استلام ${liveOrders.length} طلب، وتوليد ${alertsGenerated} تنبيه`,
+    message: `تمت المزامنة بنجاح من لوكيت: تم استلام ${result.count} طلب، وتوليد ${result.alertsGenerated} تنبيه`,
     totalActiveOrders: orders.length,
-    alertsGenerated,
+    alertsGenerated: result.alertsGenerated,
   });
 });
 
@@ -1178,132 +1208,11 @@ async function runPuppeteerScrapeLocat() {
   console.log('[Puppeteer 24/7] 🔄 بدء فحص شاشة لوكيت الحية (https://supplier.locate.sa/orders)...');
 
   try {
-    const puppeteerModule = await import('puppeteer');
-
-    let customExecutablePath: string | undefined = process.env.PUPPETEER_EXECUTABLE_PATH;
-    if (!customExecutablePath) {
-      try {
-        if (typeof (puppeteerModule.default as any).executablePath === 'function') {
-          const resolved = (puppeteerModule.default as any).executablePath();
-          if (resolved && typeof resolved.then === 'function') {
-            customExecutablePath = await resolved;
-          } else if (resolved) {
-            customExecutablePath = resolved;
-          }
-        }
-      } catch (e) {
-        // Fall back to default resolution
-      }
-    }
-
-    const browser = await puppeteerModule.default.launch({
-      headless: true,
-      ...(customExecutablePath ? { executablePath: customExecutablePath } : {}),
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--disable-gpu',
-        '--no-first-run',
-        '--no-zygote',
-      ],
-    });
-
-    const page = await browser.newPage();
-    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36');
-    await page.goto('https://supplier.locate.sa/orders', { waitUntil: 'domcontentloaded', timeout: 30000 });
-
-    // Handle authentication if redirected to login
-    const currentUrl = page.url();
-    if (currentUrl.includes('login') && settings.locateUsername && settings.locatePassword) {
-      console.log('[Puppeteer 24/7] 🔐 تسجيل الدخول التلقائي في بوابة لوكيت...');
-      await page.type('input[type="text"], input[type="email"], input[name*="user"]', settings.locateUsername);
-      await page.type('input[type="password"]', settings.locatePassword);
-      await Promise.all([
-        page.click('button[type="submit"], input[type="submit"]'),
-        page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {}),
-      ]);
-    }
-
-    // Scrape live orders table
-    const scrapedOrders = await page.evaluate(() => {
-      const items: any[] = [];
-      const rows = document.querySelectorAll('table tbody tr, .order-item, .orders-table tr');
-      rows.forEach((row) => {
-        const text = (row as HTMLElement).innerText || '';
-        if (!text.trim()) return;
-
-        const cells = Array.from(row.querySelectorAll('td')).map((c) => (c as HTMLElement).innerText.trim());
-        const orderIdMatch = text.match(/#?(\d{4,8})/);
-        const orderId = orderIdMatch ? (orderIdMatch[1].startsWith('#') ? orderIdMatch[1] : '#' + orderIdMatch[1]) : '';
-        if (!orderId) return;
-
-        let courierName = cells[1] || 'مندوب لوكيت';
-        let locatAccount = courierName;
-        let elapsed = 0;
-        const timeMatch = text.match(/(\d+)\s*(?:دقيقة|د|min|m)/i);
-        if (timeMatch) elapsed = parseInt(timeMatch[1], 10);
-
-        items.push({
-          orderId,
-          locatAccount,
-          courierName,
-          elapsedMinutes: elapsed,
-          activeOrdersHeldByCourier: 1,
-          restaurant: cells[2] || 'مطعم لوكيت',
-          customerAddress: cells[3] || 'الرياض',
-        });
-      });
-      return items;
-    });
-
-    await browser.close();
-
-    puppeteerStatus.lastScrapedCount = scrapedOrders.length;
-    puppeteerStatus.lastScrapeTime = new Date().toISOString();
+    // Puppeteer is stripped in the container cloud environment per migration guidelines.
+    // Real-time synchronization is handled directly via the Tampermonkey Userscript (supplier.locate.sa/orders).
+    console.warn('[Puppeteer 24/7] محرك Puppeteer غير متاح في بيئة الحاويات السحابية. يرجى استخدام إضافة المتصفح (Tampermonkey) للربط المباشر.');
+    puppeteerStatus.lastError = 'محرك Puppeteer غير مدعوم في بيئة الحاويات السحابية - يرجى استخدام سكربت المتصفح التلقائي Tampermonkey للمزامنة الحية';
     puppeteerStatus.status = 'idle';
-    puppeteerStatus.lastError = undefined;
-    console.log(`[Puppeteer 24/7] ✅ اكتمل السحب بنجاح: تم جلب ${scrapedOrders.length} طلب.`);
-
-    // Synchronize into server live orders
-    if (scrapedOrders.length > 0) {
-      scrapedOrders.forEach((scraped) => {
-        const isDelayed = scraped.elapsedMinutes >= settings.delayThresholdMinutes;
-        const matchedCourier = findCourierByLocatAccount(scraped.locatAccount);
-        const existing = orders.find((o) => o.id === scraped.orderId);
-
-        if (existing) {
-          existing.elapsedMinutes = scraped.elapsedMinutes;
-          existing.isDelayed = isDelayed;
-          if (isDelayed) {
-            triggerAlertsForOrder(existing);
-          }
-        } else {
-          const newOrder: Order = {
-            id: scraped.orderId,
-            locatAccount: scraped.locatAccount,
-            courierId: matchedCourier?.id,
-            courierName: matchedCourier?.name || scraped.courierName,
-            courierPhone: matchedCourier?.phone || '',
-            restaurant: scraped.restaurant,
-            customerAddress: scraped.customerAddress,
-            pickupTime: new Date().toLocaleTimeString('ar-SA', { hour: '2-digit', minute: '2-digit' }),
-            elapsedMinutes: scraped.elapsedMinutes,
-            status: isDelayed ? 'delayed' : 'in_transit',
-            isDelayed,
-            alertSentToCourier: false,
-            alertSentToAdmin: false,
-            alertSentToAdmin2: false,
-            activeOrdersHeldByCourier: scraped.activeOrdersHeldByCourier || 1,
-            lastUpdated: new Date().toISOString(),
-          };
-          if (isDelayed) {
-            triggerAlertsForOrder(newOrder);
-          }
-          orders.unshift(newOrder);
-        }
-      });
-    }
   } catch (err: any) {
     console.warn('[Puppeteer 24/7] خطأ Puppeteer:', err.message);
     puppeteerStatus.lastError = err.message;
@@ -1322,7 +1231,569 @@ app.post('/api/puppeteer/trigger', async (req: Request, res: Response) => {
   });
 });
 
-// 5.3 24/7 Automated Background Runner Engine
+// ============================================================================
+// 5.3 DIRECT CLOUD AUTO-SYNC ENGINE (سحب البيانات السحابي التلقائي 24/7 بدون أي تدخل)
+// ============================================================================
+
+async function autoLoginToLocatCloud(email: string, password: string, companyId?: string): Promise<{ token?: string; companyId?: string; error?: string }> {
+  try {
+    let resolvedCompanyId = companyId?.trim();
+
+    // If companyId is not provided, fetch companies via pre-login endpoint
+    if (!resolvedCompanyId) {
+      try {
+        const preRes = await fetch('https://api.supplier.locate.sa/api/v1/partners/pre-login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: email.trim() }),
+        });
+        if (preRes.ok) {
+          const preData: any = await preRes.json();
+          if (Array.isArray(preData.companies) && preData.companies.length > 0) {
+            resolvedCompanyId = String(preData.companies[0].id);
+          }
+        }
+      } catch (preErr) {
+        console.warn('[Cloud Auto-Sync] pre-login error:', preErr);
+      }
+    }
+
+    if (!resolvedCompanyId) {
+      resolvedCompanyId = '1'; // Default fallback company ID
+    }
+
+    const loginRes = await fetch('https://api.supplier.locate.sa/api/v1/partners/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email: email.trim(),
+        password: password.trim(),
+        company_id: String(resolvedCompanyId),
+      }),
+    });
+
+    const loginData: any = await loginRes.json();
+
+    if (!loginRes.ok) {
+      const errMsg = loginData.message || loginData.error || 'فشل تسجيل الدخول إلى لوكيت';
+      return { error: Array.isArray(errMsg) ? errMsg.join(', ') : String(errMsg) };
+    }
+
+    const token = loginData.accessToken || loginData.token || loginData.access_token || loginData.data?.accessToken;
+    if (!token) {
+      return { error: 'لم يُرجع خادم لوكيت رمز التفويض (Access Token)' };
+    }
+
+    return { token, companyId: resolvedCompanyId };
+  } catch (err: any) {
+    return { error: err.message || 'تعذر الاتصال بخادم تسجيل الدخول إلى لوكيت' };
+  }
+}
+
+async function executeLocatCloudSync(): Promise<{ success: boolean; count: number; activeCount: number; couriersCount: number; message: string; orders?: any[] }> {
+  if (cloudSyncState.status === 'syncing') {
+    return { success: false, count: 0, activeCount: 0, couriersCount: 0, message: 'عملية السحب جارية حالياً...' };
+  }
+
+  if (settings.enableCloudAutoSync === false) {
+    cloudSyncState.status = 'idle';
+    return { success: false, count: 0, activeCount: 0, couriersCount: 0, message: 'السحب التلقائي السحابي معطل في الإعدادات' };
+  }
+
+  const email = settings.locateEmail?.trim() || settings.locateUsername?.trim();
+  const password = settings.locatePassword?.trim();
+  let token = settings.locateAccessToken?.trim();
+  const companyId = settings.locateCompanyId?.trim() || '';
+
+  // If we have credentials but no token, perform auto-login
+  if (!token && email && password) {
+    console.log(`[Cloud Auto-Sync] 🔐 تسجيل دخول تلقائي إلى لوكيت للحساب (${email})...`);
+    cloudSyncState.status = 'syncing';
+    const loginResult = await autoLoginToLocatCloud(email, password, companyId);
+    if (loginResult.token) {
+      token = loginResult.token;
+      settings.locateAccessToken = token;
+      if (loginResult.companyId && !settings.locateCompanyId) {
+        settings.locateCompanyId = loginResult.companyId;
+      }
+      saveStoreToDisk();
+      console.log(`[Cloud Auto-Sync] ✅ تم تسجيل الدخول واستخراج الرمز بنجاح!`);
+    } else {
+      cloudSyncState.status = 'error';
+      cloudSyncState.lastError = loginResult.error || 'فشل تسجيل الدخول التلقائي';
+      return { success: false, count: 0, activeCount: 0, couriersCount: 0, message: cloudSyncState.lastError };
+    }
+  }
+
+  if (!token) {
+    cloudSyncState.status = 'unauthenticated';
+    cloudSyncState.hasCredentials = Boolean(email && password);
+    cloudSyncState.hasToken = false;
+    cloudSyncState.isConfigured = false;
+    cloudSyncState.lastError = 'يرجى حفظ بيانات حساب لوكيت (البريد وكلمة المرور) أو رمز الدخول (Token) للبدء في السحب التلقائي المستمر';
+    return { success: false, count: 0, activeCount: 0, couriersCount: 0, message: cloudSyncState.lastError };
+  }
+
+  cloudSyncState.status = 'syncing';
+  console.log('[Cloud Auto-Sync] 📡 جاري سحب أحدث بيانات المناديب والطلبات من سيرفر لوكيت المباشر...');
+
+  const headers: Record<string, string> = {
+    'Authorization': `Bearer ${token}`,
+    'Accept': 'application/json',
+  };
+  if (companyId) {
+    headers['company-id'] = companyId;
+  }
+
+  try {
+    // 1. Fetch Couriers / Drivers from Locate
+    let allLocatDrivers: any[] = [];
+    let driverPage = 1;
+    let driversTotal = 0;
+
+    try {
+      while (driverPage <= 5) {
+        const driversRes = await fetch(`https://api.supplier.locate.sa/api/v1/suppliers/drivers?page=${driverPage}&limit=100`, {
+          method: 'GET',
+          headers,
+        });
+
+        if (driversRes.status === 401 && email && password) {
+          console.log('[Cloud Auto-Sync] ⚠️ انتهت صلاحية الرمز أثناء جلب المناديب، جاري التجديد...');
+          const relogin = await autoLoginToLocatCloud(email, password, companyId);
+          if (relogin.token) {
+            token = relogin.token;
+            settings.locateAccessToken = token;
+            headers['Authorization'] = `Bearer ${token}`;
+            saveStoreToDisk();
+            continue;
+          }
+        }
+
+        if (!driversRes.ok) break;
+
+        const driversJson: any = await driversRes.json();
+        const pageDrivers = driversJson.data?.results || [];
+        if (!Array.isArray(pageDrivers) || pageDrivers.length === 0) break;
+
+        allLocatDrivers.push(...pageDrivers);
+        driversTotal = driversJson.data?.total || pageDrivers.length;
+        if (allLocatDrivers.length >= driversTotal) break;
+        driverPage++;
+      }
+    } catch (driverErr: any) {
+      console.warn('[Cloud Auto-Sync] تعذر جلب قائمة المناديب:', driverErr.message);
+    }
+
+    // Merge fetched drivers into internal couriers list
+    allLocatDrivers.forEach((driver: any) => {
+      const driverId = String(driver._id || driver.id || '');
+      const driverName = String(driver.name || `${driver.firstName || ''} ${driver.lastName || ''}`).trim();
+      let rawPhone = String(driver.phone || driver.mobile || '').replace(/[^0-9]/g, '');
+      if (rawPhone.startsWith('05')) {
+        rawPhone = '966' + rawPhone.slice(1);
+      } else if (rawPhone.startsWith('5')) {
+        rawPhone = '966' + rawPhone;
+      }
+      const formattedPhone = rawPhone ? `+${rawPhone}` : '';
+
+      const existingIdx = couriers.findIndex(
+        (c) => c.id === driverId || 
+               c.locatAccounts.includes(driverId) || 
+               normalizeArabic(c.name) === normalizeArabic(driverName)
+      );
+
+      if (existingIdx !== -1) {
+        const existing = couriers[existingIdx];
+        if (formattedPhone && (!existing.phone || existing.phone.length < 10)) {
+          existing.phone = formattedPhone;
+        }
+        if (!existing.locatAccounts.includes(driverId)) {
+          existing.locatAccounts.push(driverId);
+        }
+        if (driverName && !existing.locatAccounts.includes(driverName)) {
+          existing.locatAccounts.push(driverName);
+        }
+        existing.status = driver.isActive === false ? 'idle' : 'active';
+        existing.updatedAt = new Date().toISOString();
+      } else {
+        couriers.push({
+          id: driverId || `c-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+          name: driverName || 'مندوب لوكيت',
+          locatAccounts: [driverName, driverId].filter(Boolean),
+          phone: formattedPhone || '',
+          status: driver.isActive === false ? 'idle' : 'active',
+          activeOrdersCount: 0,
+          totalDeliveredToday: 0,
+          avgDeliveryTimeMinutes: 25,
+          delayedOrdersCount: 0,
+          updatedAt: new Date().toISOString(),
+        });
+      }
+    });
+
+    // 2. Fetch Orders from Locate
+    const ordersUrl = 'https://api.supplier.locate.sa/api/v2/orders?page=1&limit=100';
+    let fetchRes = await fetch(ordersUrl, {
+      method: 'GET',
+      headers,
+    });
+
+    // If 401 Unauthorized, token might be expired: attempt re-login if credentials exist
+    if (fetchRes.status === 401 && email && password) {
+      console.log('[Cloud Auto-Sync] ⚠️ انتهت صلاحية الرمز، جاري إعادة تسجيل الدخول التلقائي...');
+      const reloginRes = await autoLoginToLocatCloud(email, password, companyId);
+      if (reloginRes.token) {
+        token = reloginRes.token;
+        settings.locateAccessToken = token;
+        headers['Authorization'] = `Bearer ${token}`;
+        saveStoreToDisk();
+        fetchRes = await fetch(ordersUrl, {
+          method: 'GET',
+          headers,
+        });
+      }
+    }
+
+    if (!fetchRes.ok) {
+      const errText = await fetchRes.text();
+      throw new Error(`استجابة خادم لوكيت (${fetchRes.status}): ${errText.slice(0, 100)}`);
+    }
+
+    const json: any = await fetchRes.json();
+    const rawList: any[] = Array.isArray(json)
+      ? json
+      : (Array.isArray(json.results)
+        ? json.results
+        : (Array.isArray(json.data?.results)
+          ? json.data.results
+          : (Array.isArray(json.data)
+            ? json.data
+            : (Array.isArray(json.orders) ? json.orders : (Array.isArray(json.items) ? json.items : [])))));
+
+    console.log(`[Cloud Auto-Sync] 📦 تم استلام ${rawList.length} طلب من لوكيت و ${couriers.length} مندوب في النظام`);
+
+    let activeCount = 0;
+    let alertsGenerated = 0;
+    let newlyDelayedCount = 0;
+
+    rawList.forEach((item: any) => {
+      const isDelivered = Boolean(item.isDelivered);
+      const isCanceled = Boolean(item.isCanceled);
+      const rawNum = item.order_number || item.orderNumber || item._id || item.id || '';
+      const orderId = rawNum ? (String(rawNum).startsWith('#') ? String(rawNum) : `#${rawNum}`) : `#LOC-${Math.floor(1000 + Math.random() * 9000)}`;
+
+      const driverId = String(item.driver_id || item.driverId || '').trim();
+      const driverName = String(item.driver_name || item.driverName || item.delegate || item.driver?.name || '').trim();
+
+      // Match courier
+      let matchedCourier = couriers.find((c) => c.id === driverId || c.locatAccounts.includes(driverId));
+      if (!matchedCourier && driverName) {
+        matchedCourier = couriers.find((c) => 
+          normalizeArabic(c.name) === normalizeArabic(driverName) ||
+          c.locatAccounts.some((acc) => normalizeArabic(acc) === normalizeArabic(driverName))
+        );
+      }
+
+      if (!matchedCourier && (driverId || driverName)) {
+        matchedCourier = {
+          id: driverId || `c-${Date.now()}`,
+          name: driverName || 'مندوب لوكيت',
+          locatAccounts: [driverName, driverId].filter(Boolean),
+          phone: item.driver_phone || '',
+          status: 'active',
+          activeOrdersCount: 0,
+          totalDeliveredToday: 0,
+          avgDeliveryTimeMinutes: 25,
+          delayedOrdersCount: 0,
+          updatedAt: new Date().toISOString(),
+        };
+        couriers.push(matchedCourier);
+      }
+
+      const courierPhone = matchedCourier?.phone || item.driver_phone || '';
+      const courierDisplayName = matchedCourier?.name || driverName || 'مندوب لوكيت';
+
+      // Timing calculations
+      const timeStart = item.assigned_at || item.acceptance_time || item.order_time || item.ordered_at || item.created_at;
+      let elapsedMinutes = 0;
+      if (timeStart) {
+        const timeEnd = (isDelivered && item.delivery_time) ? new Date(item.delivery_time).getTime() : Date.now();
+        elapsedMinutes = Math.max(0, Math.floor((timeEnd - new Date(timeStart).getTime()) / (1000 * 60)));
+      } else if (typeof item.elapsed_minutes === 'number') {
+        elapsedMinutes = item.elapsed_minutes;
+      }
+
+      const isDelayed = elapsedMinutes >= settings.delayThresholdMinutes;
+
+      let orderStatus: OrderStatus = 'in_transit';
+      if (isCanceled) {
+        orderStatus = 'cancelled';
+      } else if (isDelivered) {
+        orderStatus = 'delivered';
+      } else if (isDelayed) {
+        orderStatus = 'delayed';
+        activeCount++;
+      } else {
+        orderStatus = 'in_transit';
+        activeCount++;
+      }
+
+      const restaurant = item.store_name || item.storeName || item.merchant_name || item.restaurant_name || 'متجر لوكيت';
+      const address = item.customer_address || item.customerAddress || item.customer_city || item.address || item.city || 'الوجهة المحددة';
+
+      const existingOrderIndex = orders.findIndex((o) => o.id === orderId);
+      if (existingOrderIndex !== -1) {
+        const existing = orders[existingOrderIndex];
+        existing.status = orderStatus;
+        existing.elapsedMinutes = elapsedMinutes;
+        existing.isDelayed = isDelayed;
+        existing.restaurant = restaurant;
+        existing.customerAddress = address;
+        existing.courierId = matchedCourier?.id || existing.courierId;
+        existing.courierName = courierDisplayName;
+        if (courierPhone && (!existing.courierPhone || existing.courierPhone.length < 10)) {
+          existing.courierPhone = courierPhone;
+        }
+        existing.lastUpdated = new Date().toISOString();
+
+        if (!isDelivered && !isCanceled && isDelayed && (!existing.alertSentToCourier || !existing.alertSentToAdmin)) {
+          triggerAlertsForOrder(existing);
+          alertsGenerated++;
+          newlyDelayedCount++;
+        }
+      } else {
+        const newOrder: Order = {
+          id: orderId,
+          locatAccount: driverId || driverName,
+          courierId: matchedCourier?.id,
+          courierName: courierDisplayName,
+          courierPhone: courierPhone,
+          restaurant,
+          customerAddress: address,
+          pickupTime: timeStart ? new Date(timeStart).toLocaleTimeString('ar-SA', { hour: '2-digit', minute: '2-digit' }) : new Date().toLocaleTimeString('ar-SA'),
+          elapsedMinutes,
+          status: orderStatus,
+          isDelayed,
+          alertSentToCourier: false,
+          alertSentToAdmin: false,
+          activeOrdersHeldByCourier: 1,
+          lastUpdated: new Date().toISOString(),
+        };
+
+        if (!isDelivered && !isCanceled && isDelayed) {
+          triggerAlertsForOrder(newOrder);
+          alertsGenerated++;
+          newlyDelayedCount++;
+        }
+
+        orders.unshift(newOrder);
+      }
+    });
+
+    // Update activeOrdersCount and delivered count for all couriers
+    couriers.forEach((c) => {
+      const courierOrders = orders.filter((o) => {
+        return o.courierId === c.id ||
+               c.locatAccounts.some((acc) => normalizeArabic(acc) === normalizeArabic(o.locatAccount || '')) ||
+               normalizeArabic(c.name) === normalizeArabic(o.courierName || '');
+      });
+
+      c.activeOrdersCount = courierOrders.filter((o) => o.status === 'in_transit' || o.status === 'delayed').length;
+      c.totalDeliveredToday = courierOrders.filter((o) => o.status === 'delivered').length;
+      c.delayedOrdersCount = courierOrders.filter((o) => o.isDelayed).length;
+
+      const completedWithTimes = courierOrders.filter((o) => o.status === 'delivered' && o.elapsedMinutes > 0);
+      if (completedWithTimes.length > 0) {
+        c.avgDeliveryTimeMinutes = Math.round(
+          completedWithTimes.reduce((sum, o) => sum + o.elapsedMinutes, 0) / completedWithTimes.length
+        );
+      }
+    });
+
+    cloudSyncState.status = 'connected';
+    cloudSyncState.isConfigured = true;
+    cloudSyncState.lastSyncTime = new Date().toISOString();
+    cloudSyncState.lastCount = rawList.length;
+    cloudSyncState.lastOrdersCount = rawList.length;
+    cloudSyncState.lastCouriersCount = couriers.length;
+    cloudSyncState.activeOrdersCount = activeCount;
+    cloudSyncState.lastError = undefined;
+    cloudSyncState.hasCredentials = Boolean(email && password);
+    cloudSyncState.hasToken = Boolean(token);
+    cloudSyncState.email = email;
+    cloudSyncState.companyId = settings.locateCompanyId;
+
+    settings.lastCloudSyncTimestamp = cloudSyncState.lastSyncTime;
+    settings.lastCloudSyncCount = cloudSyncState.lastCount;
+    saveStoreToDisk();
+
+    console.log(`[Cloud Auto-Sync] ✅ تم بنجاح سحب وتحديث ${couriers.length} مندوب، ${rawList.length} طلب (${activeCount} نشط)، وتوليد ${alertsGenerated} تنبيه.`);
+
+    return {
+      success: true,
+      count: rawList.length,
+      activeCount,
+      couriersCount: couriers.length,
+      message: `تم سحب وتحديث ${couriers.length} مندوب و ${rawList.length} طلب بنجاح (${activeCount} نشط حالياً)`,
+      orders,
+    };
+  } catch (err: any) {
+    console.error('[Cloud Auto-Sync Error]', err.message);
+    cloudSyncState.status = 'error';
+    cloudSyncState.lastError = err.message || 'فشل الاتصال بسيرفر لوكيت';
+    return {
+      success: false,
+      count: 0,
+      activeCount: 0,
+      couriersCount: 0,
+      message: cloudSyncState.lastError || 'خطأ في عملية السحب التلقائي',
+    };
+  }
+}
+
+// Background Cron Runner for Cloud Auto-Sync
+let cloudAutoSyncInterval: NodeJS.Timeout | null = null;
+
+function setupCloudAutoSyncRunner() {
+  if (cloudAutoSyncInterval) {
+    clearInterval(cloudAutoSyncInterval);
+    cloudAutoSyncInterval = null;
+  }
+
+  if (settings.enableCloudAutoSync !== false) {
+    const intervalSec = Math.max(10, Number(settings.locatSyncIntervalSeconds) || 20);
+    console.log(`[Cloud Auto-Sync] 🟢 تشغيل محرك السحب التلقائي السحابي المستمر 24/7 كل ${intervalSec} ثانية بدون أي تدخل`);
+
+    // Initial sync after 3 seconds from startup
+    setTimeout(() => {
+      executeLocatCloudSync().catch((err) => console.error('[Initial Cloud Sync Error]', err));
+    }, 3000);
+
+    cloudAutoSyncInterval = setInterval(() => {
+      if (cloudSyncState.status !== 'syncing' && settings.enableCloudAutoSync !== false) {
+        executeLocatCloudSync().catch((err) => console.error('[Interval Cloud Sync Error]', err));
+      }
+    }, intervalSec * 1000);
+  } else {
+    console.log('[Cloud Auto-Sync] ⚪ المحرك التلقائي في وضع التوقف (معطل في الإعدادات)');
+  }
+}
+
+// Cloud Auto-Sync Endpoints
+app.get('/api/locat/cloud-status', (req: Request, res: Response) => {
+  const email = settings.locateEmail || settings.locateUsername || '';
+  const password = settings.locatePassword || '';
+  const hasCredentials = Boolean(email && password);
+  const hasToken = Boolean(settings.locateAccessToken);
+
+  res.json({
+    success: true,
+    cloudSyncState: {
+      ...cloudSyncState,
+      isActive: settings.enableCloudAutoSync !== false,
+      hasCredentials,
+      hasToken,
+      email,
+      companyId: settings.locateCompanyId,
+    },
+    ordersCount: orders.length,
+    delayedCount: orders.filter((o) => o.isDelayed).length,
+    intervalSeconds: settings.locatSyncIntervalSeconds || 20,
+  });
+});
+
+app.post('/api/locat/cloud-pre-login', async (req: Request, res: Response) => {
+  const { email } = req.body;
+  if (!email || !email.trim()) {
+    res.status(400).json({ success: false, message: 'البريد الإلكتروني مطلوب' });
+    return;
+  }
+  try {
+    const preRes = await fetch('https://api.supplier.locate.sa/api/v1/partners/pre-login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: email.trim() }),
+    });
+    const data: any = await preRes.json();
+    if (!preRes.ok) {
+      res.status(400).json({ success: false, message: data.message || 'تعذر العثور على الحساب في لوكيت' });
+      return;
+    }
+    res.json({ success: true, companies: data.companies || [], data });
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: err.message || 'فشل الاتصال بخادم لوكيت' });
+  }
+});
+
+app.post('/api/locat/cloud-login', async (req: Request, res: Response) => {
+  const { email, password, company_id } = req.body;
+  if (!email || !password) {
+    res.status(400).json({ success: false, message: 'البريد الإلكتروني وكلمة المرور مطلوبان' });
+    return;
+  }
+
+  const result = await autoLoginToLocatCloud(email.trim(), password.trim(), company_id);
+  if (result.token) {
+    settings.locateEmail = email.trim();
+    settings.locatePassword = password.trim();
+    settings.locateAccessToken = result.token;
+    if (result.companyId) {
+      settings.locateCompanyId = result.companyId;
+    }
+    settings.enableCloudAutoSync = true;
+    saveStoreToDisk();
+
+    // Trigger immediate first pull
+    const syncRes = await executeLocatCloudSync();
+    res.json({
+      success: true,
+      message: 'تم تسجيل الدخول وتفعيل السحب التلقائي السحابي بنجاح!',
+      syncResult: syncRes,
+      cloudSyncState,
+    });
+  } else {
+    res.status(400).json({ success: false, message: result.error || 'فشل تسجيل الدخول إلى لوكيت' });
+  }
+});
+
+app.post('/api/locat/cloud-sync-now', async (req: Request, res: Response) => {
+  const syncRes = await executeLocatCloudSync();
+  res.json({
+    success: syncRes.success,
+    message: syncRes.message,
+    count: syncRes.count,
+    activeCount: syncRes.activeCount,
+    couriersCount: syncRes.couriersCount,
+    cloudSyncState,
+    orders,
+    couriers,
+    ordersCount: orders.length,
+    delayedCount: orders.filter((o) => o.isDelayed).length,
+  });
+});
+
+app.post('/api/locat/set-token', async (req: Request, res: Response) => {
+  const { token } = req.body;
+  if (!token || !token.trim()) {
+    res.status(400).json({ success: false, message: 'رمز التفويض (Token) مطلوب' });
+    return;
+  }
+
+  settings.locateAccessToken = token.trim();
+  settings.enableCloudAutoSync = true;
+  saveStoreToDisk();
+
+  const syncRes = await executeLocatCloudSync();
+  res.json({
+    success: true,
+    message: 'تم حفظ الرمز السحابي وتحديث بيانات الطلبات بنجاح',
+    syncResult: syncRes,
+    cloudSyncState,
+  });
+});
+
+// 5.4 24/7 Automated Background Runner Engine for Puppeteer
 let puppeteerScraperInterval: NodeJS.Timeout | null = null;
 
 function setupPuppeteer247Runner() {
@@ -1333,7 +1804,6 @@ function setupPuppeteer247Runner() {
 
   if (settings.enablePuppeteerHeadless) {
     console.log(`[Puppeteer 24/7 Engine] 🟢 تفعيل محرك السحب التلقائي المستمر 24/7 كل ${settings.locatSyncIntervalSeconds} ثانية`);
-    // Run initial scrape immediately
     runPuppeteerScrapeLocat().catch((err) => console.error('[Puppeteer 24/7 Startup Error]', err));
 
     const intervalMs = Math.max(15, settings.locatSyncIntervalSeconds || 30) * 1000;
@@ -1745,6 +2215,9 @@ async function startServer() {
   connectToWhatsApp().catch((err) => {
     console.error('[Baileys Startup Error]', err);
   });
+
+  // Start 24/7 direct cloud auto-sync engine (automatic orders pull without user intervention)
+  setupCloudAutoSyncRunner();
 
   // Start 24/7 automated Puppeteer background scraper if enabled
   setupPuppeteer247Runner();

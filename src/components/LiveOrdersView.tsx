@@ -17,9 +17,13 @@ import {
   ArrowUpRight,
   Sparkles,
   QrCode,
-  ShieldCheck
+  ShieldCheck,
+  Zap,
+  RotateCw,
+  Sliders,
+  CheckCircle
 } from 'lucide-react';
-import { Order, Courier, SystemSettings } from '../types';
+import { Order, Courier, SystemSettings, CloudSyncState } from '../types';
 import { WhatsAppTestModal } from './WhatsAppTestModal';
 import { AntiBanQueueModal } from './AntiBanQueueModal';
 
@@ -30,6 +34,9 @@ interface LiveOrdersViewProps {
   onTriggerManualAlert: (orderId: string, target: 'courier' | 'admin' | 'admin2' | 'both') => void;
   onOpenAddOrderModal: () => void;
   onAdvanceTime: (mins: number) => void;
+  cloudSyncState?: CloudSyncState | null;
+  onTriggerCloudSync?: () => void;
+  onOpenSettings?: () => void;
 }
 
 function normalizeArabic(text: string): string {
@@ -80,18 +87,23 @@ export const LiveOrdersView: React.FC<LiveOrdersViewProps> = ({
   onTriggerManualAlert,
   onOpenAddOrderModal,
   onAdvanceTime,
+  cloudSyncState,
+  onTriggerCloudSync,
+  onOpenSettings,
 }) => {
-  const [filter, setFilter] = useState<'all' | 'delayed' | 'ontime'>('all');
+  const [filter, setFilter] = useState<'all' | 'active' | 'delayed' | 'delivered'>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [isWhatsAppTestModalOpen, setIsWhatsAppTestModalOpen] = useState(false);
   const [isQueueModalOpen, setIsQueueModalOpen] = useState(false);
 
+  const activeOrders = orders.filter((o) => o.status === 'in_transit' || o.status === 'delayed');
   const delayedOrders = orders.filter((o) => o.isDelayed);
-  const onTimeOrders = orders.filter((o) => !o.isDelayed);
+  const deliveredOrders = orders.filter((o) => o.status === 'delivered');
 
   const filteredOrders = orders.filter((order) => {
+    if (filter === 'active' && order.status !== 'in_transit' && order.status !== 'delayed') return false;
     if (filter === 'delayed' && !order.isDelayed) return false;
-    if (filter === 'ontime' && order.isDelayed) return false;
+    if (filter === 'delivered' && order.status !== 'delivered') return false;
 
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
@@ -107,6 +119,87 @@ export const LiveOrdersView: React.FC<LiveOrdersViewProps> = ({
 
   return (
     <div className="space-y-6">
+      {/* Cloud Auto-Sync Direct Status Banner */}
+      {cloudSyncState?.isConfigured ? (
+        <div className="bg-emerald-50 border border-emerald-300 rounded-xl p-4 flex flex-col md:flex-row md:items-center justify-between gap-3 text-emerald-950 shadow-2xs">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow-xs">
+              <Zap className="w-5 h-5 animate-pulse" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h3 className="font-bold text-sm sm:text-base text-emerald-900">
+                  السحب التلقائي السحابي المباشر شغال بدون أي تدخل منك (24/7 Auto-Sync)
+                </h3>
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-300">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping"></span>
+                  نشط ومربوط
+                </span>
+              </div>
+              <p className="text-xs text-emerald-700 mt-0.5">
+                {cloudSyncState.lastSyncTime
+                  ? `آخر سحب ناجح: ${new Date(cloudSyncState.lastSyncTime).toLocaleTimeString('ar-SA')} | تم سحب ${cloudSyncState.lastCouriersCount || couriers.length} مندوب و ${cloudSyncState.lastOrdersCount || orders.length} طلب (${cloudSyncState.activeOrdersCount || activeOrders.length} نشط) | فحص آلي كل ${settings.locatSyncIntervalSeconds || 20} ثانية`
+                  : `يقوم الخادم بالاتصال المباشر بـ Locate وسحب ومراقبة المناديب والطلبات تلقائياً كل ${settings.locatSyncIntervalSeconds || 20} ثانية`}
+              </p>
+              {cloudSyncState.lastError && (
+                <p className="text-xs text-rose-600 mt-0.5 font-medium">
+                  ملاحظة السحب: {cloudSyncState.lastError}
+                </p>
+              )}
+            </div>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            {onTriggerCloudSync && (
+              <button
+                type="button"
+                onClick={onTriggerCloudSync}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white transition shadow-2xs cursor-pointer"
+                title="تنفيذ سحب فوري للطلبات الآن من لوكيت"
+              >
+                <RotateCw className="w-3.5 h-3.5" />
+                <span>سحب فوري الآن</span>
+              </button>
+            )}
+            {onOpenSettings && (
+              <button
+                type="button"
+                onClick={onOpenSettings}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-white hover:bg-emerald-100 text-emerald-800 border border-emerald-300 transition shadow-2xs cursor-pointer"
+              >
+                <Sliders className="w-3.5 h-3.5" />
+                <span>إعدادات الحساب</span>
+              </button>
+            )}
+          </div>
+        </div>
+      ) : (
+        <div className="bg-gradient-to-r from-emerald-50 via-teal-50 to-indigo-50 border border-emerald-200 rounded-xl p-4 flex flex-col md:flex-row md:items-center justify-between gap-3 text-slate-800 shadow-2xs">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow-xs">
+              <Zap className="w-5 h-5" />
+            </div>
+            <div>
+              <h3 className="font-bold text-sm sm:text-base text-slate-900">
+                تفعيل سحب بيانات لوكيت تلقائياً وبدون أي تدخل منك (Zero-Touch Cloud Sync)
+              </h3>
+              <p className="text-xs text-slate-600 mt-0.5">
+                اربط بريد وكلمة مرور حسابك في لوكيت مرة واحدة ليقوم النظام بسحب ومراقبة الطلبات تلقائياً في الخلفية على مدار الساعة دون الحاجة لفتح المتصفح إطلاقاً.
+              </p>
+            </div>
+          </div>
+          {onOpenSettings && (
+            <button
+              type="button"
+              onClick={onOpenSettings}
+              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white transition shadow-2xs shrink-0 self-start md:self-center cursor-pointer"
+            >
+              <Zap className="w-4 h-4" />
+              <span>ربط حساب لوكيت الآن 🚀</span>
+            </button>
+          )}
+        </div>
+      )}
+
       {/* Top Banner Alert if delayed orders exist */}
       {delayedOrders.length > 0 && (
         <div className="bg-rose-50 border border-rose-200 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-rose-900 shadow-2xs">
@@ -136,12 +229,12 @@ export const LiveOrdersView: React.FC<LiveOrdersViewProps> = ({
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs">
           <div className="flex items-center justify-between text-slate-500 mb-1.5">
-            <span className="text-xs font-semibold">إجمالي الطلبات النشطة</span>
+            <span className="text-xs font-semibold">إجمالي الطلبات المسحوبة</span>
             <Package className="w-4 h-4 text-blue-500" />
           </div>
           <div className="flex items-baseline gap-2">
             <span className="text-2xl font-extrabold text-slate-900">{orders.length}</span>
-            <span className="text-xs text-slate-500">طلب قيد المتابعة</span>
+            <span className="text-xs text-slate-500">طلب في النظام</span>
           </div>
         </div>
 
@@ -158,18 +251,18 @@ export const LiveOrdersView: React.FC<LiveOrdersViewProps> = ({
 
         <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs">
           <div className="flex items-center justify-between text-emerald-600 mb-1.5">
-            <span className="text-xs font-semibold">ضمن الوقت المحدد</span>
+            <span className="text-xs font-semibold">طلبات مكتملة ومسلمة</span>
             <CheckCircle2 className="w-4 h-4 text-emerald-600" />
           </div>
           <div className="flex items-baseline gap-2">
-            <span className="text-2xl font-extrabold text-emerald-600">{onTimeOrders.length}</span>
-            <span className="text-xs text-slate-500">منضبطين</span>
+            <span className="text-2xl font-extrabold text-emerald-600">{deliveredOrders.length}</span>
+            <span className="text-xs text-slate-500">تم إنجازها</span>
           </div>
         </div>
 
         <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs">
           <div className="flex items-center justify-between text-slate-500 mb-1.5">
-            <span className="text-xs font-semibold">المناديب المتصلين</span>
+            <span className="text-xs font-semibold">إجمالي المناديب المسحوبين</span>
             <User className="w-4 h-4 text-indigo-500" />
           </div>
           <div className="flex items-baseline gap-2">
@@ -203,6 +296,14 @@ export const LiveOrdersView: React.FC<LiveOrdersViewProps> = ({
               الكل ({orders.length})
             </button>
             <button
+              onClick={() => setFilter('active')}
+              className={`px-3 py-1 text-xs font-semibold rounded-md transition ${
+                filter === 'active' ? 'bg-blue-600 text-white shadow-2xs' : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              النشطة في الطريق ({activeOrders.length})
+            </button>
+            <button
               onClick={() => setFilter('delayed')}
               className={`px-3 py-1 text-xs font-semibold rounded-md transition flex items-center gap-1 ${
                 filter === 'delayed'
@@ -213,12 +314,12 @@ export const LiveOrdersView: React.FC<LiveOrdersViewProps> = ({
               المتأخرة ({delayedOrders.length})
             </button>
             <button
-              onClick={() => setFilter('ontime')}
+              onClick={() => setFilter('delivered')}
               className={`px-3 py-1 text-xs font-semibold rounded-md transition ${
-                filter === 'ontime' ? 'bg-emerald-600 text-white shadow-2xs' : 'text-slate-600 hover:text-slate-900'
+                filter === 'delivered' ? 'bg-emerald-600 text-white shadow-2xs' : 'text-slate-600 hover:text-slate-900'
               }`}
             >
-              في الوقت ({onTimeOrders.length})
+              المكتملة ({deliveredOrders.length})
             </button>
           </div>
         </div>
