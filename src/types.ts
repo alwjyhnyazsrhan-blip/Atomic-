@@ -1,8 +1,14 @@
 export interface Courier {
   id: string;
   name: string;
+  firstName?: string;
+  lastName?: string;
   locatAccounts: string[]; // List of Locat IDs/usernames (allows moving between accounts)
   phone: string; // Real WhatsApp phone number (with country code, e.g. +966...)
+  idNumber?: string; // National ID / Iqama number from Locate
+  cityId?: string;
+  gift?: number; // Rewards/points balance in Locate
+  balance?: number;
   status: 'active' | 'idle' | 'off_duty';
   activeOrdersCount: number;
   totalDeliveredToday: number;
@@ -15,14 +21,23 @@ export interface Courier {
 export type OrderStatus = 'pickup_pending' | 'in_transit' | 'delayed' | 'delivered' | 'cancelled';
 
 export interface Order {
-  id: string; // Order number (e.g. #78902)
-  locatAccount: string; // Account identifier in Locat
+  id: string; // Order number (e.g. #L22291255)
+  locateMongoId?: string; // Original _id from Locate MongoDB
+  locatAccount: string; // Account identifier in Locat (driver ID)
   courierId?: string; // Mapped internal courier id
   courierName: string; // Courier name from Locat or registered
   courierPhone: string; // Real WhatsApp phone
   restaurant: string; // Restaurant or store name
   customerAddress?: string; // Customer location or district
+  customerCoordinates?: string; // Coordinates from Locate (e.g. "26.42, 50.08")
+  deliveryCost?: string; // Delivery cost (e.g. "14")
+  paymentMethod?: string; // e.g. "Card", "Cash"
   pickupTime: string; // Timestamp string or human time
+  assignedAt?: string; // ISO date when assigned to driver
+  deliveryTime?: string; // ISO date when delivered
+  createdAt?: string; // ISO date when order created
+  isDelivered?: boolean; // Raw boolean from Locate
+  isCanceled?: boolean; // Raw boolean from Locate
   elapsedMinutes: number; // Elapsed minutes since assignment/pickup
   status: OrderStatus;
   isDelayed: boolean; // True if elapsedMinutes >= delayThresholdMinutes

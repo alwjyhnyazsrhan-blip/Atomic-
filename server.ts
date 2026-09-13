@@ -1415,11 +1415,23 @@ async function executeLocatCloudSync(): Promise<{ success: boolean; count: numbe
           existing.locatAccounts.push(driverName);
         }
         existing.status = driver.isActive === false ? 'idle' : 'active';
+        existing.firstName = driver.firstName || existing.firstName;
+        existing.lastName = driver.lastName || existing.lastName;
+        existing.idNumber = driver.id_number || existing.idNumber;
+        existing.cityId = driver.city_id || existing.cityId;
+        existing.gift = typeof driver.gift === 'number' ? driver.gift : existing.gift;
+        existing.balance = typeof driver.balance === 'number' ? driver.balance : existing.balance;
         existing.updatedAt = new Date().toISOString();
       } else {
         couriers.push({
           id: driverId || `c-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
           name: driverName || 'مندوب لوكيت',
+          firstName: driver.firstName || '',
+          lastName: driver.lastName || '',
+          idNumber: driver.id_number || '',
+          cityId: driver.city_id || '',
+          gift: typeof driver.gift === 'number' ? driver.gift : 0,
+          balance: typeof driver.balance === 'number' ? driver.balance : 0,
           locatAccounts: [driverName, driverId].filter(Boolean),
           phone: formattedPhone || '',
           status: driver.isActive === false ? 'idle' : 'active',
@@ -1432,46 +1444,60 @@ async function executeLocatCloudSync(): Promise<{ success: boolean; count: numbe
       }
     });
 
-    // 2. Fetch Orders from Locate
-    const ordersUrl = 'https://api.supplier.locate.sa/api/v2/orders?page=1&limit=100';
-    let fetchRes = await fetch(ordersUrl, {
-      method: 'GET',
-      headers,
-    });
+    // 2. Fetch Orders from Locate (Support multi-page up to recent orders)
+    let rawList: any[] = [];
+    let orderPage = 1;
+    const maxOrderPages = 3; // 300 most recent orders
 
-    // If 401 Unauthorized, token might be expired: attempt re-login if credentials exist
-    if (fetchRes.status === 401 && email && password) {
-      console.log('[Cloud Auto-Sync] ⚠️ انتهت صلاحية الرمز، جاري إعادة تسجيل الدخول التلقائي...');
-      const reloginRes = await autoLoginToLocatCloud(email, password, companyId);
-      if (reloginRes.token) {
-        token = reloginRes.token;
-        settings.locateAccessToken = token;
-        headers['Authorization'] = `Bearer ${token}`;
-        saveStoreToDisk();
-        fetchRes = await fetch(ordersUrl, {
-          method: 'GET',
-          headers,
-        });
+    while (orderPage <= maxOrderPages) {
+      const ordersUrl = `https://api.supplier.locate.sa/api/v2/orders?page=${orderPage}&limit=100`;
+      let fetchRes = await fetch(ordersUrl, {
+        method: 'GET',
+        headers,
+      });
+
+      // If 401 Unauthorized, attempt auto re-login
+      if (fetchRes.status === 401 && email && password) {
+        console.log('[Cloud Auto-Sync] ⚠️ انتهت صلاحية الرمز أثناء جلب الطلبات، جاري التجديد...');
+        const reloginRes = await autoLoginToLocatCloud(email, password, companyId);
+        if (reloginRes.token) {
+          token = reloginRes.token;
+          settings.locateAccessToken = token;
+          headers['Authorization'] = `Bearer ${token}`;
+          saveStoreToDisk();
+          fetchRes = await fetch(ordersUrl, {
+            method: 'GET',
+            headers,
+          });
+        }
       }
+
+      if (!fetchRes.ok) {
+        if (orderPage === 1) {
+          const errText = await fetchRes.text();
+          throw new Error(`استجابة خادم لوكيت (${fetchRes.status}): ${errText.slice(0, 100)}`);
+        }
+        break;
+      }
+
+      const json: any = await fetchRes.json();
+      const pageOrders: any[] = Array.isArray(json)
+        ? json
+        : (Array.isArray(json.results)
+          ? json.results
+          : (Array.isArray(json.data?.results)
+            ? json.data.results
+            : (Array.isArray(json.data)
+              ? json.data
+              : (Array.isArray(json.orders) ? json.orders : []))));
+
+      if (!Array.isArray(pageOrders) || pageOrders.length === 0) break;
+      rawList.push(...pageOrders);
+      if (pageOrders.length < 100) break;
+      orderPage++;
     }
 
-    if (!fetchRes.ok) {
-      const errText = await fetchRes.text();
-      throw new Error(`استجابة خادم لوكيت (${fetchRes.status}): ${errText.slice(0, 100)}`);
-    }
-
-    const json: any = await fetchRes.json();
-    const rawList: any[] = Array.isArray(json)
-      ? json
-      : (Array.isArray(json.results)
-        ? json.results
-        : (Array.isArray(json.data?.results)
-          ? json.data.results
-          : (Array.isArray(json.data)
-            ? json.data
-            : (Array.isArray(json.orders) ? json.orders : (Array.isArray(json.items) ? json.items : [])))));
-
-    console.log(`[Cloud Auto-Sync] 📦 تم استلام ${rawList.length} طلب من لوكيت و ${couriers.length} مندوب في النظام`);
+    console.log(`[Cloud Auto-Sync] 📦 تم استلام ${rawList.length} طلب مباشر من لوكيت عبر ${orderPage - 1} صفحات، و ${couriers.length} مندوب`);
 
     let activeCount = 0;
     let alertsGenerated = 0;
@@ -1486,7 +1512,7 @@ async function executeLocatCloudSync(): Promise<{ success: boolean; count: numbe
       const driverId = String(item.driver_id || item.driverId || '').trim();
       const driverName = String(item.driver_name || item.driverName || item.delegate || item.driver?.name || '').trim();
 
-      // Match courier
+      // Match courier with strict equality and account normalization
       let matchedCourier = couriers.find((c) => c.id === driverId || c.locatAccounts.includes(driverId));
       if (!matchedCourier && driverName) {
         matchedCourier = couriers.find((c) => 
@@ -1540,7 +1566,7 @@ async function executeLocatCloudSync(): Promise<{ success: boolean; count: numbe
       }
 
       const restaurant = item.store_name || item.storeName || item.merchant_name || item.restaurant_name || 'متجر لوكيت';
-      const address = item.customer_address || item.customerAddress || item.customer_city || item.address || item.city || 'الوجهة المحددة';
+      const address = item.customer_address || item.customerAddress || item.customer_city || item.address || item.city || '';
 
       const existingOrderIndex = orders.findIndex((o) => o.id === orderId);
       if (existingOrderIndex !== -1) {
@@ -1550,6 +1576,15 @@ async function executeLocatCloudSync(): Promise<{ success: boolean; count: numbe
         existing.isDelayed = isDelayed;
         existing.restaurant = restaurant;
         existing.customerAddress = address;
+        existing.customerCoordinates = item.customer_coordinates || existing.customerCoordinates;
+        existing.deliveryCost = String(item.delivery_cost || existing.deliveryCost || '');
+        existing.paymentMethod = item.payment_method || existing.paymentMethod;
+        existing.locateMongoId = item._id || existing.locateMongoId;
+        existing.assignedAt = item.assigned_at || existing.assignedAt;
+        existing.deliveryTime = item.delivery_time || existing.deliveryTime;
+        existing.createdAt = item.created_at || existing.createdAt;
+        existing.isDelivered = isDelivered;
+        existing.isCanceled = isCanceled;
         existing.courierId = matchedCourier?.id || existing.courierId;
         existing.courierName = courierDisplayName;
         if (courierPhone && (!existing.courierPhone || existing.courierPhone.length < 10)) {
@@ -1565,13 +1600,22 @@ async function executeLocatCloudSync(): Promise<{ success: boolean; count: numbe
       } else {
         const newOrder: Order = {
           id: orderId,
+          locateMongoId: item._id,
           locatAccount: driverId || driverName,
           courierId: matchedCourier?.id,
           courierName: courierDisplayName,
           courierPhone: courierPhone,
           restaurant,
           customerAddress: address,
+          customerCoordinates: item.customer_coordinates || '',
+          deliveryCost: String(item.delivery_cost || ''),
+          paymentMethod: item.payment_method || '',
           pickupTime: timeStart ? new Date(timeStart).toLocaleTimeString('ar-SA', { hour: '2-digit', minute: '2-digit' }) : new Date().toLocaleTimeString('ar-SA'),
+          assignedAt: item.assigned_at,
+          deliveryTime: item.delivery_time,
+          createdAt: item.created_at,
+          isDelivered,
+          isCanceled,
           elapsedMinutes,
           status: orderStatus,
           isDelayed,

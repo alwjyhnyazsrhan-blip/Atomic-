@@ -262,7 +262,7 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
 
                   {/* Real WhatsApp Phone */}
                   <div className="flex items-center justify-between text-xs px-1">
-                    <span className="text-slate-500 font-medium">رقم الواتساب الفعلي:</span>
+                    <span className="text-slate-500 font-medium">رقم الواتساب:</span>
                     <a
                       href={waUrl}
                       target="_blank"
@@ -272,9 +272,27 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
                       title="فتح محادثة واتساب مع المندوب"
                     >
                       <MessageCircle className="w-3.5 h-3.5 text-emerald-600" />
-                      <span>{courier.phone}</span>
+                      <span>{courier.phone || 'غير مسجل'}</span>
                     </a>
                   </div>
+
+                  {/* Locate Metadata (Iqama/ID, Balance/Gift) */}
+                  {(courier.idNumber || courier.gift !== undefined) && (
+                    <div className="bg-slate-50/80 px-2.5 py-1.5 rounded-lg border border-slate-100 flex items-center justify-between text-[11px]">
+                      {courier.idNumber && (
+                        <div className="flex items-center gap-1 text-slate-600">
+                          <span className="text-slate-400">الهوية/الإقامة:</span>
+                          <span className="font-mono font-semibold text-slate-800">{courier.idNumber}</span>
+                        </div>
+                      )}
+                      {courier.gift !== undefined && Number(courier.gift) > 0 && (
+                        <div className="flex items-center gap-1 text-emerald-700">
+                          <span className="text-slate-400">نقاط/مكافآت:</span>
+                          <span className="font-mono font-bold">{Math.round(Number(courier.gift))}</span>
+                        </div>
+                      )}
+                    </div>
+                  )}
 
                   {/* Stats Bar */}
                   <div className="grid grid-cols-3 gap-2 pt-2 border-t border-slate-100 text-center">
