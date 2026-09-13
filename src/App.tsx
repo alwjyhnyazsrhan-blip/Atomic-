@@ -51,6 +51,7 @@ export default function App() {
   const [isCourierModalOpen, setIsCourierModalOpen] = useState(false);
   const [courierToEdit, setCourierToEdit] = useState<Courier | null>(null);
   const [isAddOrderOpen, setIsAddOrderOpen] = useState(false);
+  const [selectedCourierForOrder, setSelectedCourierForOrder] = useState<Courier | null>(null);
   const [isWhatsAppModalOpen, setIsWhatsAppModalOpen] = useState(false);
   const [isGuideOpen, setIsGuideOpen] = useState(false);
 
@@ -297,6 +298,10 @@ export default function App() {
               setIsCourierModalOpen(true);
             }}
             onDeleteCourier={handleDeleteCourier}
+            onAssignOrderToCourier={(c) => {
+              setSelectedCourierForOrder(c);
+              setIsAddOrderOpen(true);
+            }}
           />
         )}
 
@@ -350,8 +355,12 @@ export default function App() {
 
       <QuickOrderModal
         isOpen={isAddOrderOpen}
-        onClose={() => setIsAddOrderOpen(false)}
+        onClose={() => {
+          setIsAddOrderOpen(false);
+          setSelectedCourierForOrder(null);
+        }}
         couriers={couriers}
+        initialCourier={selectedCourierForOrder}
         onAddOrder={(single) => handleLocatSyncIngest([single])}
         onPasteJson={handleLocatSyncIngest}
       />

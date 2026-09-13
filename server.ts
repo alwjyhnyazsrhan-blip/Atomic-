@@ -55,10 +55,42 @@ let settings: SystemSettings = {
   locatePassword: '',
 };
 
-// Start with empty arrays - only real data entered by the user or received from Locat
+// --- FILE PERSISTENCE (Saves couriers, orders, settings across restarts) ---
+const STORE_FILE = path.resolve(process.cwd(), 'locat_database.json');
+
 let couriers: Courier[] = [];
 let orders: Order[] = [];
 let alerts: AlertLog[] = [];
+
+function loadStoreFromDisk() {
+  try {
+    if (fs.existsSync(STORE_FILE)) {
+      const raw = fs.readFileSync(STORE_FILE, 'utf-8');
+      const data = JSON.parse(raw);
+      if (Array.isArray(data.couriers)) couriers = data.couriers;
+      if (Array.isArray(data.orders)) orders = data.orders;
+      if (Array.isArray(data.alerts)) alerts = data.alerts;
+      if (data.settings && typeof data.settings === 'object') {
+        settings = { ...settings, ...data.settings };
+      }
+      console.log(`[Store] ✅ تم تحميل البيانات من القرص: ${couriers.length} مندوب، ${orders.length} طلب.`);
+    }
+  } catch (err) {
+    console.error('[Store] فشل قراءة ملف التخزين المحلي:', err);
+  }
+}
+
+function saveStoreToDisk() {
+  try {
+    const data = { couriers, orders, alerts, settings };
+    fs.writeFileSync(STORE_FILE, JSON.stringify(data, null, 2), 'utf-8');
+  } catch (err) {
+    console.error('[Store] فشل حفظ البيانات في القرص:', err);
+  }
+}
+
+// Initial load
+loadStoreFromDisk();
 
 // --- BAILEYS WHATSAPP ENGINE & PERSISTENT SESSION ---
 const AUTH_DIR = process.env.BAILEYS_AUTH_DIR || path.resolve(process.cwd(), 'baileys_auth_info');
@@ -240,14 +272,60 @@ async function sendWhatsAppDirect(phone: string, text: string): Promise<{ succes
   }
 }
 
+// Arabic text normalization for flexible matching (أ/إ/آ -> ا, ة -> ه, ى -> ي, no tashkeel)
+function normalizeArabic(text: string): string {
+  if (!text) return '';
+  return text
+    .trim()
+    .toLowerCase()
+    .replace(/[أإآ]/g, 'ا')
+    .replace(/ة/g, 'ه')
+    .replace(/ى/g, 'ي')
+    .replace(/[\u064B-\u065F]/g, '')
+    .replace(/\s+/g, ' ');
+}
+
+// Helper: Match courier by Locat account, courier name, courier ID, or phone
+function findCourierForOrder(account?: string, courierName?: string, courierId?: string, courierPhone?: string): Courier | undefined {
+  if (courierId) {
+    const foundById = couriers.find((c) => c.id === courierId);
+    if (foundById) return foundById;
+  }
+  const cleanAccount = normalizeArabic(account || '');
+  const cleanName = normalizeArabic(courierName || '');
+  const cleanPhone = (courierPhone || '').replace(/\D/g, '');
+
+  return couriers.find((c) => {
+    const cName = normalizeArabic(c.name);
+    const cPhone = c.phone.replace(/\D/g, '');
+
+    // Phone match
+    if (cleanPhone && cPhone && (cleanPhone === cPhone || cleanPhone.endsWith(cPhone) || cPhone.endsWith(cleanPhone))) {
+      return true;
+    }
+
+    // Locat accounts list check
+    const matchAccount = c.locatAccounts.some((acc) => {
+      const a = normalizeArabic(acc);
+      return a === cleanAccount || a === cleanName || (cleanAccount && (a.includes(cleanAccount) || cleanAccount.includes(a)));
+    });
+    if (matchAccount) return true;
+
+    // Name match
+    if (cleanName && cName) {
+      if (cName === cleanName || cName.includes(cleanName) || cleanName.includes(cName)) return true;
+    }
+    if (cleanAccount && cName) {
+      if (cName === cleanAccount || cName.includes(cleanAccount) || cleanAccount.includes(cName)) return true;
+    }
+
+    return false;
+  });
+}
+
 // Helper: Match courier by Locat account
-function findCourierByLocatAccount(account: string): Courier | undefined {
-  if (!account) return undefined;
-  const clean = account.trim().toLowerCase();
-  return couriers.find((c) =>
-    c.locatAccounts.some((acc) => acc.trim().toLowerCase() === clean) ||
-    c.name.trim().toLowerCase() === clean
-  );
+function findCourierByLocatAccount(account: string, courierName?: string): Courier | undefined {
+  return findCourierForOrder(account, courierName);
 }
 
 // Helper: Clean phone number for WhatsApp links (digits only)
@@ -599,15 +677,16 @@ app.post('/api/settings', (req: Request, res: Response) => {
     }
   });
 
+  saveStoreToDisk();
   res.json({ success: true, settings, message: 'تم تحديث الإعدادات بنجاح' });
 });
 
 // 2. Couriers Management
 app.get('/api/couriers', (req: Request, res: Response) => {
-  // Update activeOrdersCount based on current orders
+  // Update activeOrdersCount based on current orders using flexible smart matching
   const enrichedCouriers = couriers.map((c) => {
     const activeCount = orders.filter((o) => {
-      const match = findCourierByLocatAccount(o.locatAccount);
+      const match = findCourierForOrder(o.locatAccount, o.courierName, o.courierId, o.courierPhone);
       return match ? match.id === c.id : false;
     }).length;
     return {
@@ -645,15 +724,17 @@ app.post('/api/couriers', (req: Request, res: Response) => {
         updatedAt: new Date().toISOString(),
       };
 
-      // Also update any active orders belonging to this courier
+      // Also link any existing active orders belonging to this courier
       orders.forEach((o) => {
-        if (couriers[index].locatAccounts.some((acc) => acc.toLowerCase() === o.locatAccount.toLowerCase())) {
+        const match = findCourierForOrder(o.locatAccount, o.courierName, o.courierId, o.courierPhone);
+        if (match && match.id === couriers[index].id) {
           o.courierId = couriers[index].id;
           o.courierName = couriers[index].name;
           o.courierPhone = couriers[index].phone;
         }
       });
 
+      saveStoreToDisk();
       res.json({ success: true, courier: couriers[index], message: 'تم تحديث بيانات المندوب بنجاح' });
       return;
     }
@@ -663,7 +744,7 @@ app.post('/api/couriers', (req: Request, res: Response) => {
   const newCourier: Courier = {
     id: `c-${Date.now()}`,
     name,
-    locatAccounts: accountsArray.length > 0 ? accountsArray : [`drv_${Date.now().toString().slice(-4)}`],
+    locatAccounts: accountsArray.length > 0 ? accountsArray : [name],
     phone,
     status: status || 'active',
     activeOrdersCount: 0,
@@ -674,13 +755,35 @@ app.post('/api/couriers', (req: Request, res: Response) => {
     updatedAt: new Date().toISOString(),
   };
 
+  // Immediately link any orders in the system matching this new courier
+  let linkedOrdersCount = 0;
+  orders.forEach((o) => {
+    const isMatch =
+      newCourier.locatAccounts.some((acc) => normalizeArabic(acc) === normalizeArabic(o.locatAccount || '')) ||
+      normalizeArabic(newCourier.name) === normalizeArabic(o.courierName || '') ||
+      normalizeArabic(newCourier.name) === normalizeArabic(o.locatAccount || '') ||
+      normalizeArabic(newCourier.name).includes(normalizeArabic(o.courierName || '')) ||
+      (o.courierName && normalizeArabic(o.courierName).includes(normalizeArabic(newCourier.name))) ||
+      (o.courierPhone && newCourier.phone.replace(/\D/g, '') === o.courierPhone.replace(/\D/g, ''));
+
+    if (isMatch) {
+      o.courierId = newCourier.id;
+      o.courierName = newCourier.name;
+      o.courierPhone = newCourier.phone;
+      linkedOrdersCount++;
+    }
+  });
+
+  newCourier.activeOrdersCount = linkedOrdersCount;
   couriers.push(newCourier);
+  saveStoreToDisk();
   res.json({ success: true, courier: newCourier, message: 'تمت إضافة المندوب بنجاح' });
 });
 
 app.delete('/api/couriers/:id', (req: Request, res: Response) => {
   const { id } = req.params;
   couriers = couriers.filter((c) => c.id !== id);
+  saveStoreToDisk();
   res.json({ success: true, message: 'تم حذف المندوب بنجاح' });
 });
 
@@ -720,7 +823,7 @@ app.post('/api/locat/sync', (req: Request, res: Response) => {
     const elapsedMinutes = Number(incoming.elapsedMinutes) || 0;
     const isDelayed = elapsedMinutes >= settings.delayThresholdMinutes;
 
-    const matchedCourier = findCourierByLocatAccount(locatAccount);
+    const matchedCourier = findCourierForOrder(locatAccount, incoming.courierName, incoming.courierId, incoming.courierPhone);
 
     // Find if order already tracked
     const existingIndex = orders.findIndex((o) => o.id === orderId);
@@ -732,6 +835,11 @@ app.post('/api/locat/sync', (req: Request, res: Response) => {
       existing.status = incoming.status || (isDelayed ? 'delayed' : existing.status);
       existing.restaurant = incoming.restaurant || existing.restaurant;
       existing.customerAddress = incoming.customerAddress || existing.customerAddress;
+      if (matchedCourier) {
+        existing.courierId = matchedCourier.id;
+        existing.courierName = matchedCourier.name;
+        existing.courierPhone = matchedCourier.phone;
+      }
       existing.activeOrdersHeldByCourier = incoming.activeOrdersHeldByCourier || (matchedCourier ? matchedCourier.activeOrdersCount : existing.activeOrdersHeldByCourier);
       existing.lastUpdated = new Date().toISOString();
 
@@ -743,7 +851,7 @@ app.post('/api/locat/sync', (req: Request, res: Response) => {
       // New incoming order
       const newOrder: Order = {
         id: orderId,
-        locatAccount,
+        locatAccount: locatAccount || (matchedCourier ? matchedCourier.locatAccounts[0] : ''),
         courierId: matchedCourier?.id,
         courierName: matchedCourier?.name || incoming.courierName || 'مندوب غير مسجل',
         courierPhone: matchedCourier?.phone || incoming.courierPhone || '',
@@ -768,6 +876,8 @@ app.post('/api/locat/sync', (req: Request, res: Response) => {
       orders.unshift(newOrder);
     }
   });
+
+  saveStoreToDisk();
 
   res.json({
     success: true,
@@ -798,6 +908,7 @@ app.post('/api/orders/advance-time', (req: Request, res: Response) => {
     }
   });
 
+  saveStoreToDisk();
   res.json({ success: true, message: `تم تقديم الوقت بـ ${minutes} دقيقة وتم إطلاق ${triggered} تنبيه جديد`, orders });
 });
 

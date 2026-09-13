@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   X, 
   Package, 
@@ -16,6 +16,7 @@ interface QuickOrderModalProps {
   isOpen: boolean;
   onClose: () => void;
   couriers: Courier[];
+  initialCourier?: Courier | null;
   onAddOrder: (orderData: any) => void;
   onPasteJson: (jsonArray: any[]) => void;
 }
@@ -24,34 +25,56 @@ export const QuickOrderModal: React.FC<QuickOrderModalProps> = ({
   isOpen,
   onClose,
   couriers,
+  initialCourier,
   onAddOrder,
   onPasteJson,
 }) => {
   const [tab, setTab] = useState<'single' | 'json'>('single');
   const [orderId, setOrderId] = useState('');
-  const [courierAccount, setCourierAccount] = useState(couriers[0]?.locatAccounts[0] || '');
-  const [elapsedMinutes, setElapsedMinutes] = useState(0);
-  const [restaurant, setRestaurant] = useState('');
-  const [customerAddress, setCustomerAddress] = useState('');
+  const [courierAccount, setCourierAccount] = useState('');
+  const [elapsedMinutes, setElapsedMinutes] = useState(35);
+  const [restaurant, setRestaurant] = useState('شاورما كلاسيك');
+  const [customerAddress, setCustomerAddress] = useState('حي العليا، الرياض');
   const [activeHeld, setActiveHeld] = useState(1);
   const [jsonText, setJsonText] = useState('');
+
+  useEffect(() => {
+    if (isOpen) {
+      const generatedId = `#LOC-${Math.floor(10000 + Math.random() * 90000)}`;
+      setOrderId(generatedId);
+      setElapsedMinutes(35);
+      setRestaurant('مطعم شريك (لوكيت)');
+      setCustomerAddress('حي الملقا، الرياض');
+
+      if (initialCourier) {
+        setCourierAccount(initialCourier.locatAccounts[0] || initialCourier.name);
+      } else if (couriers.length > 0) {
+        setCourierAccount(couriers[0].locatAccounts[0] || couriers[0].name);
+      } else {
+        setCourierAccount('driver_01');
+      }
+    }
+  }, [isOpen, initialCourier, couriers]);
 
   if (!isOpen) return null;
 
   const handleSingleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const matchedCourier = couriers.find((c) =>
-      c.locatAccounts.some((acc) => acc.toLowerCase() === courierAccount.toLowerCase())
+      c.id === initialCourier?.id ||
+      c.locatAccounts.some((acc) => acc.toLowerCase() === courierAccount.toLowerCase()) ||
+      c.name.toLowerCase() === courierAccount.toLowerCase()
     );
 
     onAddOrder({
       id: orderId.trim(),
       locatAccount: courierAccount,
+      courierId: matchedCourier?.id,
       courierName: matchedCourier?.name || courierAccount,
       courierPhone: matchedCourier?.phone || '',
       elapsedMinutes: Number(elapsedMinutes) || 0,
-      restaurant: restaurant.trim(),
-      customerAddress: customerAddress.trim(),
+      restaurant: restaurant.trim() || 'مطعم شريك',
+      customerAddress: customerAddress.trim() || 'الوجهة المحددة',
       activeOrdersHeldByCourier: Number(activeHeld) || 1,
     });
     onClose();

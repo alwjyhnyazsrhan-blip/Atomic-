@@ -32,6 +32,47 @@ interface LiveOrdersViewProps {
   onAdvanceTime: (mins: number) => void;
 }
 
+function normalizeArabic(text: string): string {
+  if (!text) return '';
+  return text
+    .trim()
+    .toLowerCase()
+    .replace(/[أإآ]/g, 'ا')
+    .replace(/ة/g, 'ه')
+    .replace(/ى/g, 'ي')
+    .replace(/[\u064B-\u065F]/g, '')
+    .replace(/\s+/g, ' ');
+}
+
+function findMatchingCourier(couriers: Courier[], order: Order): Courier | undefined {
+  if (order.courierId) {
+    const byId = couriers.find((c) => c.id === order.courierId);
+    if (byId) return byId;
+  }
+  const oName = normalizeArabic(order.courierName || '');
+  const oAcc = normalizeArabic(order.locatAccount || '');
+  const oPhone = (order.courierPhone || '').replace(/\D/g, '');
+
+  return couriers.find((c) => {
+    const cName = normalizeArabic(c.name);
+    const cPhone = c.phone.replace(/\D/g, '');
+
+    if (oPhone && cPhone && (oPhone === cPhone || oPhone.endsWith(cPhone) || cPhone.endsWith(oPhone))) {
+      return true;
+    }
+    if (c.locatAccounts.some((acc) => {
+      const a = normalizeArabic(acc);
+      return a === oAcc || a === oName || (oAcc && (a.includes(oAcc) || oAcc.includes(a)));
+    })) {
+      return true;
+    }
+    if (cName && (cName === oName || cName === oAcc || cName.includes(oName) || oName.includes(cName) || cName.includes(oAcc) || oAcc.includes(cName))) {
+      return true;
+    }
+    return false;
+  });
+}
+
 export const LiveOrdersView: React.FC<LiveOrdersViewProps> = ({
   orders,
   couriers,
@@ -244,10 +285,7 @@ export const LiveOrdersView: React.FC<LiveOrdersViewProps> = ({
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {filteredOrders.map((order) => {
             const isCritical = order.elapsedMinutes >= settings.criticalDelayMinutes;
-            const courier = couriers.find((c) =>
-              c.locatAccounts.some((acc) => acc.toLowerCase() === order.locatAccount.toLowerCase()) ||
-              c.id === order.courierId
-            );
+            const courier = findMatchingCourier(couriers, order);
             const courierPhone = courier?.phone || order.courierPhone;
             const cleanPhone = courierPhone.replace(/[^0-9]/g, '');
 
