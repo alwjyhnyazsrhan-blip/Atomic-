@@ -9,6 +9,7 @@ import { SettingsModal } from './components/SettingsModal';
 import { CourierModal } from './components/CourierModal';
 import { QuickOrderModal } from './components/QuickOrderModal';
 import { WhatsAppTestModal } from './components/WhatsAppTestModal';
+import { QuickWhatsAppModal } from './components/QuickWhatsAppModal';
 import { GuideWalkthroughModal } from './components/GuideWalkthroughModal';
 import { Order, Courier, SystemSettings, AlertLog, WhatsAppConnectionState, CloudSyncState } from './types';
 import { Bell, CheckCircle2, AlertTriangle, X } from 'lucide-react';
@@ -54,6 +55,7 @@ export default function App() {
   const [isAddOrderOpen, setIsAddOrderOpen] = useState(false);
   const [selectedCourierForOrder, setSelectedCourierForOrder] = useState<Courier | null>(null);
   const [isWhatsAppModalOpen, setIsWhatsAppModalOpen] = useState(false);
+  const [isQuickWhatsAppOpen, setIsQuickWhatsAppOpen] = useState(false);
   const [isGuideOpen, setIsGuideOpen] = useState(false);
 
   const showToast = (text: string, type: 'success' | 'alert' = 'success') => {
@@ -313,6 +315,7 @@ export default function App() {
         onSendQuickDailyReport={handleSendReportToAdmin}
         isSyncing={isSyncing}
         onOpenWhatsApp={() => setIsWhatsAppModalOpen(true)}
+        onOpenQuickWhatsApp={() => setIsQuickWhatsAppOpen(true)}
         whatsappState={whatsappState}
         cloudSyncState={cloudSyncState}
         onOpenGuide={() => setIsGuideOpen(true)}
@@ -386,6 +389,14 @@ export default function App() {
         settings={settings}
         couriers={couriers}
         onAlertGenerated={() => fetchData(true)}
+        onSaveSettings={handleSaveSettings}
+      />
+
+      <QuickWhatsAppModal
+        isOpen={isQuickWhatsAppOpen}
+        onClose={() => setIsQuickWhatsAppOpen(false)}
+        settings={settings}
+        onSaved={handleSaveSettings}
       />
 
       <SettingsModal

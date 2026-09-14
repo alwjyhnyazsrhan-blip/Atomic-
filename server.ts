@@ -265,11 +265,44 @@ async function connectToWhatsApp(forceNew: boolean = false) {
   }
 }
 
-// Helper: Send Direct WhatsApp Message via Baileys (with wa.me link fallback)
+// Helper: Send Direct WhatsApp Message via Baileys and/or Webhook URL (with wa.me link fallback)
 async function sendWhatsAppDirect(phone: string, text: string): Promise<{ success: boolean; method: string; waLink: string; error?: string }> {
   const cleanPhone = formatPhoneForWhatsApp(phone);
   const waLink = `https://wa.me/${cleanPhone}?text=${encodeURIComponent(text)}`;
 
+  // 1. If custom WhatsApp Webhook URL is configured, forward message to it
+  if (settings.webhookUrl && typeof settings.webhookUrl === 'string' && settings.webhookUrl.trim().startsWith('http')) {
+    try {
+      const webhookHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (settings.webhookApiKey) {
+        webhookHeaders['Authorization'] = `Bearer ${settings.webhookApiKey}`;
+        webhookHeaders['x-api-key'] = settings.webhookApiKey;
+      }
+      fetch(settings.webhookUrl.trim(), {
+        method: 'POST',
+        headers: webhookHeaders,
+        body: JSON.stringify({
+          phone: cleanPhone,
+          to: cleanPhone,
+          number: cleanPhone,
+          chatId: `${cleanPhone}@c.us`,
+          message: text,
+          body: text,
+          text: text,
+          timestamp: new Date().toISOString(),
+          riyadhTime: getRiyadhTimeString(),
+          apiKey: settings.webhookApiKey || undefined,
+        }),
+      }).catch((wErr) => {
+        console.warn(`[WhatsApp Webhook Forward Warning] ${wErr?.message}`);
+      });
+      console.log(`[WhatsApp Webhook] 🚀 تم توجيه التنبيه إلى رابط الويب هوك: ${settings.webhookUrl}`);
+    } catch (err: any) {
+      console.warn(`[WhatsApp Webhook Error] ${err?.message}`);
+    }
+  }
+
+  // 2. Send via Baileys if connected
   if (sock && whatsappState.isLoggedIn && whatsappState.status === 'connected') {
     try {
       const jid = `${cleanPhone}@s.whatsapp.net`;
@@ -380,10 +413,38 @@ function buildAdminMessage(order: Order, courierName: string, activeCount: numbe
   return `🚨 [تنبيه تأخير طلب - لوكيت]\n• رقم الطلب: ${order.id}\n• المندوب: ${courierName}\n• المدة المستغرقة: ${order.elapsedMinutes} دقيقة (الحد المسموح: ${settings.delayThresholdMinutes} دقيقة)\n• وقت الاستلام: ${order.pickupTime || 'غير محدد'}\n• وقت التنبيه: ${riyadhNow}\n• عدد الطلبات النشطة بحوزته: ${activeCount} طلبات\n• المطعم: ${order.restaurant}\n• الحي: ${order.customerAddress || 'غير محدد'}`;
 }
 
+// Helper: Construct Admin Critical Delay Alert Message (Triggered at 45 minutes to check on courier)
+function buildAdminCriticalDelayMessage(order: Order, courierName: string, courierPhone: string, activeCount: number): string {
+  const riyadhNow = getRiyadhTimeString();
+  const cleanCourierPhone = courierPhone ? formatPhoneForWhatsApp(courierPhone) : '';
+  const waCourierDirectLink = cleanCourierPhone ? `https://wa.me/${cleanCourierPhone}` : '';
+
+  let msg = `🚨 *[تنبيه تأخير حرج - تجاوز 45 دقيقة]*\n`;
+  msg += `نحيطكم علماً بأن الطلب استمر بالتأخير وتجاوز *${order.elapsedMinutes} دقيقة* دون إتمام التسليم.\n`;
+  msg += `يرجى التواصل الفوري مع المندوب لمتابعة الحالة.\n\n`;
+  msg += `🛵 *بيانات المندوب للمتابعة:*\n`;
+  msg += `• اسم المندوب: *${courierName}*\n`;
+  msg += `• جوال المندوب: *${courierPhone || 'غير مسجل'}*\n`;
+  msg += `• عدد الطلبات النشطة بحوزته: *${activeCount}* طلبات\n`;
+  if (waCourierDirectLink) {
+    msg += `💬 *رابط محادثة واتساب المباشرة مع المندوب:*\n${waCourierDirectLink}\n`;
+  }
+  msg += `\n📋 *تفاصيل الطلب:*\n`;
+  msg += `• رقم الطلب: *${order.id}*\n`;
+  msg += `• المطعم / المتجر: ${order.restaurant}\n`;
+  msg += `• وجهة العميل: ${order.customerAddress || 'الوجهة المحددة'}\n`;
+  msg += `• وقت الاستلام: ${order.pickupTime || 'غير محدد'}\n`;
+  msg += `• المدة المستغرقة: *${order.elapsedMinutes} دقيقة* (تأخر عن 45 دقيقة)\n`;
+  msg += `• وقت التنبيه: ${riyadhNow}\n`;
+  msg += `───────────────────────\n`;
+  msg += `⚠️ تم الإرسال آلياً بدون أي تدخل عبر نظام أتمتة لوكيت.`;
+
+  return msg;
+}
+
 // Helper: Construct Admin 2 Escalation Message upon continued delay
 function buildAdmin2Message(order: Order, courierName: string, courierPhone: string, activeCount: number): string {
-  const riyadhNow = getRiyadhTimeString();
-  return `🚨 [تصعيد تأخير حرج - إشعار الإدارة الثانية]\n• اسم المندوب: ${courierName}\n• جوال المندوب للتواصل المباشر: ${courierPhone || 'غير مسجل'}\n• رقم الطلب: ${order.id}\n• وقت الاستلام: ${order.pickupTime || 'غير محدد'}\n• المدة المستغرقة: ${order.elapsedMinutes} دقيقة\n• وقت التصعيد: ${riyadhNow}\n• عدد الطلبات النشطة بحوزته: ${activeCount} طلبات\n• المطعم: ${order.restaurant}\n• الحي: ${order.customerAddress || 'غير محدد'}\n⚠️ تنبيه: استمر التأخير وتجاوز حد التصعيد الحرج (${settings.criticalDelayMinutes} دقيقة).\nيرجى التواصل الفوري مع المندوب عبر رقمه لمعرفة أسباب التأخير.`;
+  return buildAdminCriticalDelayMessage(order, courierName, courierPhone, activeCount);
 }
 
 // Helper: Enqueue message safely with Anti-Ban delay & Cooldown protection
@@ -499,40 +560,157 @@ async function processMessageQueue() {
   isQueueProcessing = false;
 }
 
-// Helper: Trigger alerts for delayed orders (including Admin 2 Escalation)
+// Helper: Trigger alerts for delayed orders automatically based on user policy:
+// 1. Level 1: Delayed (>= delayThresholdMinutes) -> automatically alerts Courier
+// 2. Level 2: Critical Delay (>= 45 minutes) -> automatically alerts Admin to inspect Courier
 function triggerAlertsForOrder(order: Order) {
-  const courier = findCourierByLocatAccount(order.locatAccount);
-  const courierName = courier ? courier.name : order.courierName || 'المندوب';
-  const courierPhone = courier ? courier.phone : order.courierPhone;
+  const courier = findCourierForOrder(order.locatAccount, order.courierName, order.courierId, order.courierPhone);
+  const courierName = courier ? courier.name : (order.courierName || 'المندوب');
+  const courierPhone = courier ? courier.phone : (order.courierPhone || '');
   const activeCount = order.activeOrdersHeldByCourier || (courier ? courier.activeOrdersCount : 1);
 
   // 1. Alert courier if delayed and not sent yet
-  if (!order.alertSentToCourier && settings.autoAlertCourier && courierPhone) {
+  if (
+    order.elapsedMinutes >= settings.delayThresholdMinutes &&
+    !order.alertSentToCourier &&
+    settings.autoAlertCourier &&
+    courierPhone
+  ) {
     const message = buildCourierMessage(order, courierName);
     enqueueAlert('courier', courierName, courierPhone, order.id, message, order.elapsedMinutes, activeCount);
     order.alertSentToCourier = true;
     order.courierAlertTime = getRiyadhTimeString();
+    console.log(`[Auto-Alert Engine] 🛵 تم إرسال تنبيه تأخير تلقائي للمندوب: ${courierName} (${courierPhone}) للطلب ${order.id} (${order.elapsedMinutes} دقيقة)`);
   }
 
-  // 2. Alert admin 1 if delayed and not sent yet
-  if (!order.alertSentToAdmin && settings.autoAlertAdmin && settings.adminPhone) {
-    const adminMsg = buildAdminMessage(order, courierName, activeCount);
-    enqueueAlert('admin', settings.adminName || 'الإدارة الأولى', settings.adminPhone, order.id, adminMsg, order.elapsedMinutes, activeCount);
+  // 2. Alert admin 1 if delay reaches 45 minutes (criticalDelayMinutes) so admin can check on courier
+  const criticalMinutes = Number(settings.criticalDelayMinutes) || 45;
+  if (
+    order.elapsedMinutes >= criticalMinutes &&
+    !order.alertSentToAdmin &&
+    settings.autoAlertAdmin &&
+    settings.adminPhone
+  ) {
+    const adminMsg = buildAdminCriticalDelayMessage(order, courierName, courierPhone, activeCount);
+    enqueueAlert('admin', settings.adminName || 'مشرف العمليات', settings.adminPhone, order.id, adminMsg, order.elapsedMinutes, activeCount);
     order.alertSentToAdmin = true;
     order.adminAlertTime = getRiyadhTimeString();
+    console.log(`[Auto-Alert Engine] 🚨 تم إرسال تنبيه تأخير حرج (45+ دقيقة) للمشرف: ${settings.adminPhone} لمتابعة المندوب ${courierName} للطلب ${order.id}`);
   }
 
   // 3. Alert Admin 2 upon continued delay (Escalation logic)
   if (
-    order.elapsedMinutes >= settings.criticalDelayMinutes &&
+    order.elapsedMinutes >= criticalMinutes &&
     !order.alertSentToAdmin2 &&
     settings.autoAlertAdmin2 &&
     settings.adminPhone2
   ) {
-    const admin2Msg = buildAdmin2Message(order, courierName, courierPhone, activeCount);
-    enqueueAlert('admin2', settings.adminName2 || 'الإدارة الثانية (تصعيد)', settings.adminPhone2, order.id, admin2Msg, order.elapsedMinutes, activeCount);
+    const admin2Msg = buildAdminCriticalDelayMessage(order, courierName, courierPhone, activeCount);
+    enqueueAlert('admin2', settings.adminName2 || 'إدارة العمليات 2', settings.adminPhone2, order.id, admin2Msg, order.elapsedMinutes, activeCount);
     order.alertSentToAdmin2 = true;
     order.admin2AlertTime = getRiyadhTimeString();
+  }
+}
+
+// 24/7 Dedicated Real-Time Order Watcher & Automated Dispatch Engine
+let autoAlertsWatcherInterval: NodeJS.Timeout | null = null;
+
+function setupAutomatedAlertsWatcher() {
+  if (autoAlertsWatcherInterval) {
+    clearInterval(autoAlertsWatcherInterval);
+    autoAlertsWatcherInterval = null;
+  }
+
+  console.log('[Auto-Alert Engine] 🟢 تفعيل محرك الفحص والإرسال التلقائي للتنبيهات 24/7 كل 25 ثانية بدون أي تدخل بشري');
+
+  // Immediate check after 2 seconds
+  setTimeout(() => {
+    checkAndTriggerAutomatedAlerts();
+  }, 2000);
+
+  autoAlertsWatcherInterval = setInterval(() => {
+    checkAndTriggerAutomatedAlerts();
+  }, 25 * 1000);
+}
+
+function checkAndTriggerAutomatedAlerts() {
+  const now = Date.now();
+  let stateChanged = false;
+
+  orders.forEach((order) => {
+    if (order.isDelivered || order.isCanceled || order.status === 'delivered' || order.status === 'cancelled') {
+      return;
+    }
+
+    // Recalculate live elapsed time in minutes
+    const startIso = order.assignedAt || order.createdAt;
+    if (startIso) {
+      const startTime = new Date(startIso).getTime();
+      if (!isNaN(startTime) && startTime > 0) {
+        order.elapsedMinutes = Math.max(0, Math.floor((now - startTime) / 60000));
+      }
+    }
+
+    const isDelayed = order.elapsedMinutes >= settings.delayThresholdMinutes;
+    order.isDelayed = isDelayed;
+    if (isDelayed && order.status !== 'delayed') {
+      order.status = 'delayed';
+      stateChanged = true;
+    }
+
+    const courier = findCourierForOrder(order.locatAccount, order.courierName, order.courierId, order.courierPhone);
+    const courierName = courier ? courier.name : (order.courierName || 'المندوب');
+    const courierPhone = courier ? courier.phone : (order.courierPhone || '');
+    const activeCount = order.activeOrdersHeldByCourier || (courier ? courier.activeOrdersCount : 1);
+
+    // Rule 1: إذا تأخر الطلب: يرسل للمندوب فوراً
+    if (
+      isDelayed &&
+      !order.alertSentToCourier &&
+      settings.autoAlertCourier &&
+      courierPhone
+    ) {
+      const courierMsg = buildCourierMessage(order, courierName);
+      enqueueAlert('courier', courierName, courierPhone, order.id, courierMsg, order.elapsedMinutes, activeCount);
+      order.alertSentToCourier = true;
+      order.courierAlertTime = getRiyadhTimeString();
+      stateChanged = true;
+      console.log(`[Auto-Alert Watcher] 🛵 إرسال تلقائي لتنبيه المندوب: ${courierName} (${courierPhone}) - الطلب ${order.id} (${order.elapsedMinutes} دقيقة)`);
+    }
+
+    // Rule 2: إذا تأخر عن 45 دقيقة: يرسل للمشرف/الإدارة عشان يشوف المندوب
+    const criticalMinutes = Number(settings.criticalDelayMinutes) || 45;
+    if (
+      order.elapsedMinutes >= criticalMinutes &&
+      !order.alertSentToAdmin &&
+      settings.autoAlertAdmin &&
+      settings.adminPhone
+    ) {
+      const adminCriticalMsg = buildAdminCriticalDelayMessage(order, courierName, courierPhone, activeCount);
+      enqueueAlert('admin', settings.adminName || 'مشرف العمليات', settings.adminPhone, order.id, adminCriticalMsg, order.elapsedMinutes, activeCount);
+      order.alertSentToAdmin = true;
+      order.adminAlertTime = getRiyadhTimeString();
+      stateChanged = true;
+      console.log(`[Auto-Alert Watcher] 🚨 إرسال تلقائي لتنبيه المشرف (تجاوز 45 دقيقة): ${settings.adminPhone} لمتابعة المندوب ${courierName} - الطلب ${order.id}`);
+    }
+
+    // Rule 3: تصعيد الإدارة 2 (إذا كان مسجلاً)
+    if (
+      order.elapsedMinutes >= criticalMinutes &&
+      !order.alertSentToAdmin2 &&
+      settings.autoAlertAdmin2 &&
+      settings.adminPhone2
+    ) {
+      const admin2Msg = buildAdminCriticalDelayMessage(order, courierName, courierPhone, activeCount);
+      enqueueAlert('admin2', settings.adminName2 || 'إدارة العمليات 2', settings.adminPhone2, order.id, admin2Msg, order.elapsedMinutes, activeCount);
+      order.alertSentToAdmin2 = true;
+      order.admin2AlertTime = getRiyadhTimeString();
+      stateChanged = true;
+    }
+  });
+
+  if (stateChanged) {
+    saveStoreToDisk();
   }
 }
 
@@ -712,6 +890,7 @@ app.post('/api/settings', (req: Request, res: Response) => {
   // Reconfigure 24/7 automated Cloud Auto-Sync and Puppeteer runners
   setupCloudAutoSyncRunner();
   setupPuppeteer247Runner();
+  setupAutomatedAlertsWatcher();
 
   // Re-evaluate current orders delay state based on new threshold
   orders.forEach((o) => {
@@ -721,8 +900,45 @@ app.post('/api/settings', (req: Request, res: Response) => {
     }
   });
 
+  // Evaluate any pending alerts immediately
+  checkAndTriggerAutomatedAlerts();
+
   saveStoreToDisk();
   res.json({ success: true, settings, message: 'تم تحديث الإعدادات بنجاح' });
+});
+
+// Dedicated Instant WhatsApp Contact & Webhook Link persistence
+app.post('/api/settings/whatsapp-contact', (req: Request, res: Response) => {
+  const body = req.body;
+  if (body.adminPhone !== undefined) settings.adminPhone = String(body.adminPhone).trim();
+  if (body.adminName !== undefined) settings.adminName = String(body.adminName).trim();
+  if (body.adminPhone2 !== undefined) settings.adminPhone2 = String(body.adminPhone2).trim();
+  if (body.adminName2 !== undefined) settings.adminName2 = String(body.adminName2).trim();
+  if (body.webhookUrl !== undefined) settings.webhookUrl = String(body.webhookUrl).trim();
+  if (body.webhookApiKey !== undefined) settings.webhookApiKey = String(body.webhookApiKey).trim();
+  if (body.whatsAppProvider) settings.whatsAppProvider = body.whatsAppProvider;
+
+  // Re-run watcher to catch any pending alerts for the newly configured admin phone
+  checkAndTriggerAutomatedAlerts();
+
+  saveStoreToDisk();
+  console.log(`[Settings Engine] 💾 تم حفظ وتثبيت بيانات الواتساب ورقم التواصل بنجاح: الإدارة: ${settings.adminPhone || 'غير محدد'}, الرابط: ${settings.webhookUrl || 'غير محدد'}`);
+  res.json({
+    success: true,
+    settings,
+    message: 'تم حفظ وتثبيت رقم التواصل ورابط الواتساب بنجاح في قاعدة البيانات',
+  });
+});
+
+// Endpoint to manually or programmatically trigger an automated alert cycle on demand
+app.post('/api/alerts/trigger-check', (req: Request, res: Response) => {
+  checkAndTriggerAutomatedAlerts();
+  res.json({
+    success: true,
+    message: 'تم تشغيل فحص وإرسال التنبيهات التلقائية بنجاح',
+    delayedCount: orders.filter((o) => o.isDelayed).length,
+    criticalDelayedCount: orders.filter((o) => o.elapsedMinutes >= (Number(settings.criticalDelayMinutes) || 45)).length,
+  });
 });
 
 // 2. Couriers Management
@@ -879,7 +1095,12 @@ function ingestLiveOrders(liveOrders: any[], sourceName: string = 'Locat'): { co
       existing.activeOrdersHeldByCourier = incoming.activeOrdersHeldByCourier || (matchedCourier ? matchedCourier.activeOrdersCount : existing.activeOrdersHeldByCourier);
       existing.lastUpdated = new Date().toISOString();
 
-      if (isDelayed && (!existing.alertSentToCourier || !existing.alertSentToAdmin)) {
+      const shouldTrigger = !existing.isDelivered && !existing.isCanceled && (
+        (isDelayed && !existing.alertSentToCourier) ||
+        (existing.elapsedMinutes >= (Number(settings.criticalDelayMinutes) || 45) && (!existing.alertSentToAdmin || !existing.alertSentToAdmin2))
+      );
+
+      if (shouldTrigger) {
         triggerAlertsForOrder(existing);
         alertsGenerated++;
       }
@@ -1641,7 +1862,12 @@ async function executeLocatCloudSync(): Promise<{ success: boolean; count: numbe
         lastUpdated: new Date().toISOString(),
       };
 
-      if (!isDelivered && !isCanceled && isDelayed && (!orderRecord.alertSentToCourier || !orderRecord.alertSentToAdmin)) {
+      const shouldTriggerAlert = !isDelivered && !isCanceled && (
+        (isDelayed && !orderRecord.alertSentToCourier) ||
+        (orderRecord.elapsedMinutes >= (Number(settings.criticalDelayMinutes) || 45) && (!orderRecord.alertSentToAdmin || !orderRecord.alertSentToAdmin2))
+      );
+
+      if (shouldTriggerAlert) {
         triggerAlertsForOrder(orderRecord);
         alertsGenerated++;
         newlyDelayedCount++;
@@ -2287,6 +2513,9 @@ async function startServer() {
 
   // Start 24/7 direct cloud auto-sync engine (automatic orders pull without user intervention)
   setupCloudAutoSyncRunner();
+
+  // Start 24/7 dedicated automated order watcher & alert dispatcher
+  setupAutomatedAlertsWatcher();
 
   // Start 24/7 automated Puppeteer background scraper if enabled
   setupPuppeteer247Runner();

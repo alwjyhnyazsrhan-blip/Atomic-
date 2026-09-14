@@ -30,6 +30,7 @@ interface HeaderProps {
   onSendQuickDailyReport: () => void;
   isSyncing: boolean;
   onOpenWhatsApp?: () => void;
+  onOpenQuickWhatsApp?: () => void;
   whatsappState?: WhatsAppConnectionState | null;
   cloudSyncState?: CloudSyncState | null;
   onOpenGuide?: () => void;
@@ -47,6 +48,7 @@ export const Header: React.FC<HeaderProps> = ({
   onSendQuickDailyReport,
   isSyncing,
   onOpenWhatsApp,
+  onOpenQuickWhatsApp,
   whatsappState,
   cloudSyncState,
   onOpenGuide,
@@ -92,32 +94,47 @@ export const Header: React.FC<HeaderProps> = ({
 
           {/* Quick Metrics & Simulation Controls */}
           <div className="flex flex-wrap items-center gap-2">
+            {/* Automated Alerting Indicator */}
+            <div 
+              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-emerald-50 text-emerald-800 border border-emerald-200"
+              title="إرسال التنبيهات تلقائي بدون أي تدخل بشري: للمندوب عند التأخر، وللإدارة عند تجاوز 45 دقيقة"
+            >
+              <Zap className="w-3.5 h-3.5 text-emerald-600 animate-pulse" />
+              <span>إرسال آلي:</span>
+              <span className="font-bold text-emerald-900">{settings.delayThresholdMinutes}د مندوب | {settings.criticalDelayMinutes || 45}د إدارة</span>
+            </div>
+
             {/* Delay Threshold indicator */}
             <button
               onClick={onOpenSettings}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-slate-100 hover:bg-slate-200 text-slate-700 transition"
-              title="اضغط لتعديل حد التأخير"
+              title="اضغط لتعديل حد التأخير وتوقيت التنبيهات"
             >
               <Clock className="w-3.5 h-3.5 text-amber-600" />
-              <span>حد التنبيه:</span>
-              <strong className="text-amber-800">{settings.delayThresholdMinutes} دقيقة</strong>
+              <span>الإشعار عند 45د:</span>
+              <strong className="text-rose-700">{settings.criticalDelayMinutes || 45} دقيقة</strong>
             </button>
 
-            {/* Admin WhatsApp indicator */}
+            {/* Admin WhatsApp & Webhook indicator */}
             <button
-              onClick={onOpenSettings}
+              onClick={onOpenQuickWhatsApp || onOpenSettings}
               className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition ${
                 settings.adminPhone 
                   ? 'bg-slate-100 hover:bg-slate-200 text-slate-700' 
                   : 'bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200'
               }`}
-              title="رقم إدارة العمليات"
+              title="اضغط لتعديل وتثبيت رقم ورابط الواتساب"
             >
               <Phone className="w-3.5 h-3.5 text-emerald-600" />
               <span>واتساب الإدارة:</span>
               <strong className="font-mono" dir="ltr">
                 {settings.adminPhone || 'اضغط لتعيين رقم الإدارة'}
               </strong>
+              {settings.webhookUrl && (
+                <span className="px-1.5 py-0.2 bg-indigo-100 text-indigo-800 text-[10px] rounded font-bold">
+                  +رابط
+                </span>
+              )}
             </button>
 
             {/* WhatsApp Session / QR Button */}

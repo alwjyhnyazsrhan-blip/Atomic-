@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   X, 
   Clock, 
@@ -15,7 +15,11 @@ import {
   Server,
   Terminal,
   Zap,
-  Bot
+  Bot,
+  Globe,
+  Link2,
+  Key,
+  CheckCircle2
 } from 'lucide-react';
 import { SystemSettings } from '../types';
 
@@ -51,6 +55,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [dailyReportTime, setDailyReportTime] = useState(settings.dailyReportTime || '23:00');
   const [syncInterval, setSyncInterval] = useState(settings.locatSyncIntervalSeconds || 20);
 
+  // WhatsApp Webhook & Provider
+  const [webhookUrl, setWebhookUrl] = useState(settings.webhookUrl || '');
+  const [webhookApiKey, setWebhookApiKey] = useState(settings.webhookApiKey || '');
+  const [whatsAppProvider, setWhatsAppProvider] = useState(settings.whatsAppProvider || 'baileys_vps');
+  const [quickContactSaved, setQuickContactSaved] = useState(false);
+
   // Cloud Auto-Sync (Direct 24/7 API without intervention)
   const [enableCloudAutoSync, setEnableCloudAutoSync] = useState(settings.enableCloudAutoSync ?? true);
   const [locateEmail, setLocateEmail] = useState(settings.locateEmail || settings.locateUsername || '');
@@ -61,6 +71,38 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [isTestingCloudLogin, setIsTestingCloudLogin] = useState(false);
   const [isSyncingNow, setIsSyncingNow] = useState(false);
   const [cloudFeedback, setCloudFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+
+  // Robustly sync state with latest settings whenever modal opens or settings update
+  useEffect(() => {
+    if (isOpen) {
+      setDelayThreshold(settings.delayThresholdMinutes || 45);
+      setCriticalDelay(settings.criticalDelayMinutes || 60);
+      setAdminPhone(settings.adminPhone || '');
+      setAdminName(settings.adminName || '');
+      setAdminPhone2(settings.adminPhone2 || '');
+      setAdminName2(settings.adminName2 || '');
+      setAutoAlertCourier(settings.autoAlertCourier ?? true);
+      setAutoAlertAdmin(settings.autoAlertAdmin ?? true);
+      setAutoAlertAdmin2(settings.autoAlertAdmin2 ?? true);
+      setAlertCooldownMinutes(settings.alertCooldownMinutes || 20);
+      setAntiBanMinDelay(settings.antiBanMinDelaySeconds || 5);
+      setAntiBanMaxDelay(settings.antiBanMaxDelaySeconds || 10);
+      setEnablePuppeteerHeadless(settings.enablePuppeteerHeadless ?? false);
+      setLocateUsername(settings.locateUsername || '');
+      setLocatePassword(settings.locatePassword || '');
+      setAutoDailyReport(settings.autoDailyReport ?? true);
+      setDailyReportTime(settings.dailyReportTime || '23:00');
+      setSyncInterval(settings.locatSyncIntervalSeconds || 20);
+      setEnableCloudAutoSync(settings.enableCloudAutoSync ?? true);
+      setLocateEmail(settings.locateEmail || settings.locateUsername || '');
+      setLocateCompanyId(settings.locateCompanyId || '');
+      setLocateAccessToken(settings.locateAccessToken || '');
+      setWebhookUrl(settings.webhookUrl || '');
+      setWebhookApiKey(settings.webhookApiKey || '');
+      setWhatsAppProvider(settings.whatsAppProvider || 'baileys_vps');
+      setQuickContactSaved(false);
+    }
+  }, [isOpen, settings]);
 
   if (!isOpen) return null;
 
@@ -163,6 +205,34 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     }
   };
 
+  const handleQuickSaveContact = async () => {
+    const payload: Partial<SystemSettings> = {
+      adminPhone: adminPhone.trim(),
+      adminName: adminName.trim(),
+      adminPhone2: adminPhone2.trim(),
+      adminName2: adminName2.trim(),
+      webhookUrl: webhookUrl.trim(),
+      webhookApiKey: webhookApiKey.trim(),
+      whatsAppProvider,
+    };
+    try {
+      await fetch('/api/settings/whatsapp-contact', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (typeof window !== 'undefined') {
+        const cur = JSON.parse(localStorage.getItem('locat_settings') || '{}');
+        localStorage.setItem('locat_settings', JSON.stringify({ ...cur, ...payload }));
+      }
+      onSaveSettings(payload);
+      setQuickContactSaved(true);
+      setTimeout(() => setQuickContactSaved(false), 3000);
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     onSaveSettings({
@@ -172,6 +242,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       adminName: adminName.trim(),
       adminPhone2: adminPhone2.trim(),
       adminName2: adminName2.trim(),
+      webhookUrl: webhookUrl.trim(),
+      webhookApiKey: webhookApiKey.trim(),
+      whatsAppProvider,
       autoAlertCourier,
       autoAlertAdmin,
       autoAlertAdmin2,
@@ -221,16 +294,16 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           <div className="space-y-3 bg-amber-50/60 p-4 rounded-xl border border-amber-200/80">
             <h3 className="font-bold text-slate-900 text-sm flex items-center gap-2">
               <Clock className="w-4 h-4 text-amber-600" />
-              منطق التأخير والتنبيهات (الحدود والتصعيد)
+              نظام إرسال التنبيهات التلقائي بدون تدخل بشري (المندوب أولاً ثم الإدارة)
             </h3>
             <p className="text-slate-600 leading-relaxed">
-              عند حدوث التأخير، يرسل النظام رسالة تذكير للمندوب أولاً. وفي حال استمرار التأخير، يتم تصعيد إشعار آلي فوري لرقم الإدارة الثاني.
+              يعمل النظام آلياً على مدار الساعة (24/7): عند حدوث التأخير، يرسل رسالة تذكير للمندوب أولاً لسرعة الإنجاز. وإذا استمر وتأخر عن 45 دقيقة، يرسل إشعاراً عاجلاً للإدارة مع بيانات المندوب ورابط محادثة واتساب مباشر لمتابعته.
             </p>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
               <div>
                 <label className="block font-bold text-slate-700 mb-1">
-                  زمن تنبيه المندوب الأولي:
+                  1. زمن تنبيه المندوب آلياً عند التأخر:
                 </label>
                 <div className="flex items-center gap-2">
                   <input
@@ -245,13 +318,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   <span className="text-slate-500 font-medium">دقيقة</span>
                 </div>
                 <span className="text-[10px] text-slate-500 mt-0.5 block">
-                  الموصى به للعميل: 45 دقيقة من استلام الطلب
+                  يرسل تنبيهاً مباشراً للمندوب لسرعة تسليم الطلب والإفادة
                 </span>
               </div>
 
               <div>
                 <label className="block font-bold text-slate-700 mb-1">
-                  زمن تصعيد الإدارة الثاني (استمرار التأخير):
+                  2. زمن إشعار المشرف/الإدارة لمتابعة المندوب:
                 </label>
                 <div className="flex items-center gap-2">
                   <input
@@ -265,19 +338,45 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   />
                   <span className="text-slate-500 font-medium">دقيقة</span>
                 </div>
-                <span className="text-[10px] text-slate-500 mt-0.5 block">
-                  يرسل إشعاراً عاجلاً لرقم الإدارة الثاني ببيانات المندوب والطلبات
+                <span className="text-[10px] text-rose-600 font-medium mt-0.5 block">
+                  المطلوب: 45 دقيقة — يرسل للإدارة اسم المندوب ورقمه ورابط واتساب مباشر لمتابعته
                 </span>
               </div>
             </div>
           </div>
 
-          {/* Section 2: Management WhatsApp Numbers (Admin 1 & Admin 2 Escalation) */}
+          {/* Section 2: Management WhatsApp Numbers & Webhook Link */}
           <div className="space-y-4 bg-slate-50 p-4 rounded-xl border border-slate-200">
-            <h3 className="font-bold text-slate-900 text-sm flex items-center gap-2">
-              <Phone className="w-4 h-4 text-emerald-600" />
-              أرقام واتساب الإدارة (المشرف الأساسي + رقم الإدارة الثاني للتصعيد)
-            </h3>
+            <div className="flex items-center justify-between">
+              <h3 className="font-bold text-slate-900 text-sm flex items-center gap-2">
+                <Phone className="w-4 h-4 text-emerald-600" />
+                أرقام ورابط الواتساب المعتمدة للإشعارات
+              </h3>
+              <button
+                type="button"
+                onClick={handleQuickSaveContact}
+                className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold flex items-center gap-1 transition shadow-2xs"
+              >
+                {quickContactSaved ? (
+                  <>
+                    <CheckCircle2 className="w-3.5 h-3.5 text-white" />
+                    <span>تم التثبيت!</span>
+                  </>
+                ) : (
+                  <>
+                    <Save className="w-3.5 h-3.5" />
+                    <span>حفظ الأرقام والرابط فوراً</span>
+                  </>
+                )}
+              </button>
+            </div>
+
+            {quickContactSaved && (
+              <div className="p-2.5 bg-emerald-50 border border-emerald-200 text-emerald-900 rounded-lg text-xs font-bold flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                <span>تم حفظ وتثبيت أرقام التواصل ورابط الواتساب بنجاح في قاعدة البيانات!</span>
+              </div>
+            )}
 
             {/* Admin 1 */}
             <div className="p-3 bg-white rounded-lg border border-slate-200 space-y-2">
@@ -343,6 +442,44 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     placeholder="الإدارة العليا / المشرف المناوب"
                     className="w-full text-xs px-3 py-2 bg-white border border-rose-300 rounded-lg focus:ring-2 focus:ring-rose-400 focus:outline-none"
                   />
+                </div>
+              </div>
+            </div>
+
+            {/* Webhook URL & API Key */}
+            <div className="p-3 bg-indigo-50/40 rounded-lg border border-indigo-200 space-y-2">
+              <div className="font-bold text-slate-800 text-xs flex items-center justify-between">
+                <span className="flex items-center gap-1.5">
+                  <Globe className="w-4 h-4 text-indigo-600" />
+                  <span>3. رابط الواتساب الخارجي (Webhook / Gateway URL)</span>
+                </span>
+                <span className="text-[10px] text-indigo-700 bg-indigo-50 border border-indigo-200 px-2 py-0.5 rounded font-semibold">اختياري</span>
+              </div>
+              <p className="text-[11px] text-slate-600 leading-normal">
+                يمكنك إدخال رابط Webhook أو بوابة واتساب خارجية لتوجيه الإشعارات إليها تلقائياً فورياً عند أي تأخير:
+              </p>
+              <div className="space-y-2">
+                <div className="relative">
+                  <input
+                    type="url"
+                    value={webhookUrl}
+                    onChange={(e) => setWebhookUrl(e.target.value)}
+                    placeholder="https://api.example.com/whatsapp/send"
+                    className="w-full font-mono text-xs px-3 py-2 bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-400 focus:outline-none pl-8"
+                    dir="ltr"
+                  />
+                  <Link2 className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5" />
+                </div>
+                <div className="relative">
+                  <input
+                    type="password"
+                    value={webhookApiKey}
+                    onChange={(e) => setWebhookApiKey(e.target.value)}
+                    placeholder="مفتاح API أو Token التوثيق للرابط (اختياري)"
+                    className="w-full font-mono text-xs px-3 py-2 bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-400 focus:outline-none pl-8"
+                    dir="ltr"
+                  />
+                  <Key className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5" />
                 </div>
               </div>
             </div>

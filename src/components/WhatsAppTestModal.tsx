@@ -17,6 +17,11 @@ import {
   Clock,
   HardDrive,
   CheckCheck,
+  Phone,
+  Globe,
+  Link2,
+  Key,
+  Save,
 } from 'lucide-react';
 import { SystemSettings, Courier, WhatsAppConnectionState } from '../types';
 
@@ -26,6 +31,7 @@ interface WhatsAppTestModalProps {
   settings: SystemSettings;
   couriers: Courier[];
   onAlertGenerated?: () => void;
+  onSaveSettings?: (newSettings: Partial<SystemSettings>) => void;
 }
 
 export const WhatsAppTestModal: React.FC<WhatsAppTestModalProps> = ({
@@ -34,8 +40,9 @@ export const WhatsAppTestModal: React.FC<WhatsAppTestModalProps> = ({
   settings,
   couriers,
   onAlertGenerated,
+  onSaveSettings,
 }) => {
-  const [activeTab, setActiveTab] = useState<'qr' | 'test' | 'terminal' | 'server'>('qr');
+  const [activeTab, setActiveTab] = useState<'qr' | 'contact' | 'test' | 'terminal' | 'server'>('qr');
   const [connectionState, setConnectionState] = useState<WhatsAppConnectionState>({
     status: 'disconnected',
     isLoggedIn: false,
@@ -52,6 +59,16 @@ export const WhatsAppTestModal: React.FC<WhatsAppTestModalProps> = ({
   const [isPolling, setIsPolling] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
 
+  // Contact Numbers & Webhook Link States
+  const [adminPhone, setAdminPhone] = useState(settings.adminPhone || '');
+  const [adminName, setAdminName] = useState(settings.adminName || 'مشرف العمليات');
+  const [adminPhone2, setAdminPhone2] = useState(settings.adminPhone2 || '');
+  const [adminName2, setAdminName2] = useState(settings.adminName2 || 'إدارة التصعيد الثاني');
+  const [webhookUrl, setWebhookUrl] = useState(settings.webhookUrl || '');
+  const [webhookApiKey, setWebhookApiKey] = useState(settings.webhookApiKey || '');
+  const [contactSaved, setContactSaved] = useState(false);
+  const [isSavingContact, setIsSavingContact] = useState(false);
+
   // Test Message States
   const [recipientType, setRecipientType] = useState<'admin' | 'admin2' | 'courier' | 'custom'>('admin');
   const [customPhone, setCustomPhone] = useState(settings.adminPhone || '');
@@ -66,6 +83,58 @@ export const WhatsAppTestModal: React.FC<WhatsAppTestModalProps> = ({
   } | null>(null);
 
   const [copied, setCopied] = useState(false);
+
+  // Sync state whenever modal opens or settings change
+  useEffect(() => {
+    if (isOpen) {
+      setAdminPhone(settings.adminPhone || '');
+      setAdminName(settings.adminName || 'مشرف العمليات');
+      setAdminPhone2(settings.adminPhone2 || '');
+      setAdminName2(settings.adminName2 || 'إدارة التصعيد الثاني');
+      setWebhookUrl(settings.webhookUrl || '');
+      setWebhookApiKey(settings.webhookApiKey || '');
+      if (settings.adminPhone) {
+        setCustomPhone(settings.adminPhone);
+      }
+      setContactSaved(false);
+    }
+  }, [isOpen, settings]);
+
+  const handleSaveContactFromModal = async (overrides?: Partial<SystemSettings>) => {
+    setIsSavingContact(true);
+    setContactSaved(false);
+    try {
+      const payload: Partial<SystemSettings> = {
+        adminPhone: overrides?.adminPhone !== undefined ? overrides.adminPhone : adminPhone.trim(),
+        adminName: overrides?.adminName !== undefined ? overrides.adminName : adminName.trim(),
+        adminPhone2: overrides?.adminPhone2 !== undefined ? overrides.adminPhone2 : adminPhone2.trim(),
+        adminName2: overrides?.adminName2 !== undefined ? overrides.adminName2 : adminName2.trim(),
+        webhookUrl: overrides?.webhookUrl !== undefined ? overrides.webhookUrl : webhookUrl.trim(),
+        webhookApiKey: overrides?.webhookApiKey !== undefined ? overrides.webhookApiKey : webhookApiKey.trim(),
+      };
+      const res = await fetch('/api/settings/whatsapp-contact', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (data.success) {
+        if (typeof window !== 'undefined') {
+          const cur = JSON.parse(localStorage.getItem('locat_settings') || '{}');
+          localStorage.setItem('locat_settings', JSON.stringify({ ...cur, ...payload }));
+        }
+        if (onSaveSettings) {
+          onSaveSettings(payload);
+        }
+        setContactSaved(true);
+        setTimeout(() => setContactSaved(false), 3500);
+      }
+    } catch (e) {
+      console.error('Failed to save whatsapp contact in modal:', e);
+    } finally {
+      setIsSavingContact(false);
+    }
+  };
 
   // Fetch live WhatsApp status from server
   const fetchStatus = useCallback(async () => {
@@ -248,11 +317,11 @@ export const WhatsAppTestModal: React.FC<WhatsAppTestModalProps> = ({
         </div>
 
         {/* Tab Navigation */}
-        <div className="flex items-center gap-1.5 border-b border-slate-100 pb-2">
+        <div className="flex items-center gap-1.5 border-b border-slate-100 pb-2 overflow-x-auto">
           <button
             type="button"
             onClick={() => setActiveTab('qr')}
-            className={`px-3.5 py-2 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${
+            className={`px-3.5 py-2 rounded-lg text-xs font-bold transition flex items-center gap-1.5 shrink-0 ${
               activeTab === 'qr'
                 ? 'bg-slate-900 text-white shadow-2xs'
                 : 'text-slate-600 hover:bg-slate-100'
@@ -264,8 +333,21 @@ export const WhatsAppTestModal: React.FC<WhatsAppTestModalProps> = ({
 
           <button
             type="button"
+            onClick={() => setActiveTab('contact')}
+            className={`px-3.5 py-2 rounded-lg text-xs font-bold transition flex items-center gap-1.5 shrink-0 ${
+              activeTab === 'contact'
+                ? 'bg-slate-900 text-white shadow-2xs'
+                : 'text-slate-600 hover:bg-slate-100'
+            }`}
+          >
+            <Phone className="w-3.5 h-3.5" />
+            <span>أرقام التواصل والرابط</span>
+          </button>
+
+          <button
+            type="button"
             onClick={() => setActiveTab('test')}
-            className={`px-3.5 py-2 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${
+            className={`px-3.5 py-2 rounded-lg text-xs font-bold transition flex items-center gap-1.5 shrink-0 ${
               activeTab === 'test'
                 ? 'bg-slate-900 text-white shadow-2xs'
                 : 'text-slate-600 hover:bg-slate-100'
@@ -278,7 +360,7 @@ export const WhatsAppTestModal: React.FC<WhatsAppTestModalProps> = ({
           <button
             type="button"
             onClick={() => setActiveTab('server')}
-            className={`px-3.5 py-2 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${
+            className={`px-3.5 py-2 rounded-lg text-xs font-bold transition flex items-center gap-1.5 shrink-0 ${
               activeTab === 'server'
                 ? 'bg-slate-900 text-white shadow-2xs'
                 : 'text-slate-600 hover:bg-slate-100'
@@ -291,7 +373,7 @@ export const WhatsAppTestModal: React.FC<WhatsAppTestModalProps> = ({
           <button
             type="button"
             onClick={() => setActiveTab('terminal')}
-            className={`px-3.5 py-2 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${
+            className={`px-3.5 py-2 rounded-lg text-xs font-bold transition flex items-center gap-1.5 shrink-0 ${
               activeTab === 'terminal'
                 ? 'bg-slate-900 text-white shadow-2xs'
                 : 'text-slate-600 hover:bg-slate-100'
@@ -454,6 +536,140 @@ export const WhatsAppTestModal: React.FC<WhatsAppTestModalProps> = ({
           </div>
         )}
 
+        {/* TAB CONTACT: CONTACT NUMBERS & WEBHOOK PERSISTENCE */}
+        {activeTab === 'contact' && (
+          <div className="space-y-4">
+            {contactSaved && (
+              <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-900 rounded-xl text-xs font-bold flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                <span>✅ تم حفظ وتثبيت أرقام التواصل ورابط الواتساب بنجاح في قاعدة البيانات!</span>
+              </div>
+            )}
+
+            {/* Primary Admin */}
+            <div className="p-4 bg-emerald-50/40 rounded-xl border border-emerald-200 space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2 text-xs font-bold text-slate-900">
+                  <Phone className="w-4 h-4 text-emerald-600" />
+                  <span>1. رقم التواصل الأساسي (مشرف العمليات المباشر)</span>
+                </div>
+                <span className="text-[10px] text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded font-bold">
+                  أساسي
+                </span>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-700 mb-1">رقم الواتساب الدولي:</label>
+                  <input
+                    type="text"
+                    value={adminPhone}
+                    onChange={(e) => setAdminPhone(e.target.value)}
+                    placeholder="+966500000000"
+                    className="w-full font-mono text-xs px-3 py-2 bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                    dir="ltr"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-700 mb-1">اسم المشرف:</label>
+                  <input
+                    type="text"
+                    value={adminName}
+                    onChange={(e) => setAdminName(e.target.value)}
+                    placeholder="مشرف العمليات المباشر"
+                    className="w-full text-xs px-3 py-2 bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Escalation Admin 2 */}
+            <div className="p-4 bg-rose-50/30 rounded-xl border border-rose-200 space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2 text-xs font-bold text-rose-950">
+                  <Phone className="w-4 h-4 text-rose-600" />
+                  <span>2. رقم إدارة التصعيد الثاني (التأخير الحرج)</span>
+                </div>
+                <span className="text-[10px] text-rose-800 bg-rose-100 px-2 py-0.5 rounded font-bold">
+                  اختياري
+                </span>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-700 mb-1">رقم إدارة التصعيد:</label>
+                  <input
+                    type="text"
+                    value={adminPhone2}
+                    onChange={(e) => setAdminPhone2(e.target.value)}
+                    placeholder="+966590000000"
+                    className="w-full font-mono text-xs px-3 py-2 bg-white border border-rose-200 rounded-lg focus:ring-2 focus:ring-rose-400 focus:outline-none"
+                    dir="ltr"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-700 mb-1">اسم جهة التصعيد:</label>
+                  <input
+                    type="text"
+                    value={adminName2}
+                    onChange={(e) => setAdminName2(e.target.value)}
+                    placeholder="الإدارة العليا / المشرف المناوب"
+                    className="w-full text-xs px-3 py-2 bg-white border border-rose-200 rounded-lg focus:ring-2 focus:ring-rose-400 focus:outline-none"
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* WhatsApp Webhook Link */}
+            <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2 text-xs font-bold text-slate-900">
+                  <Globe className="w-4 h-4 text-indigo-600" />
+                  <span>3. رابط الواتساب (Webhook / Gateway URL)</span>
+                </div>
+                <span className="text-[10px] text-indigo-800 bg-indigo-50 border border-indigo-200 px-2 py-0.5 rounded font-bold">
+                  اختياري
+                </span>
+              </div>
+              <div className="space-y-2">
+                <div className="relative">
+                  <input
+                    type="url"
+                    value={webhookUrl}
+                    onChange={(e) => setWebhookUrl(e.target.value)}
+                    placeholder="https://api.example.com/whatsapp/send-alert"
+                    className="w-full font-mono text-xs px-3 py-2 bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-400 focus:outline-none pl-8"
+                    dir="ltr"
+                  />
+                  <Link2 className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5" />
+                </div>
+                <div className="relative">
+                  <input
+                    type="password"
+                    value={webhookApiKey}
+                    onChange={(e) => setWebhookApiKey(e.target.value)}
+                    placeholder="مفتاح التوثيق للرابط (API Key / Bearer Token - اختياري)"
+                    className="w-full font-mono text-xs px-3 py-2 bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-400 focus:outline-none pl-8"
+                    dir="ltr"
+                  />
+                  <Key className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5" />
+                </div>
+              </div>
+            </div>
+
+            {/* Save Button */}
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => handleSaveContactFromModal()}
+                disabled={isSavingContact}
+                className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold flex items-center gap-1.5 transition text-xs shadow-sm"
+              >
+                <Save className="w-3.5 h-3.5" />
+                <span>{isSavingContact ? 'جاري التثبيت...' : 'حفظ وتثبيت البيانات الآن'}</span>
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* TAB 2: REAL TEST MESSAGE DISPATCH (ZERO DUMMY DATA) */}
         {activeTab === 'test' && (
           <div className="space-y-4">
@@ -515,11 +731,20 @@ export const WhatsAppTestModal: React.FC<WhatsAppTestModalProps> = ({
                 <div className="text-xs text-slate-600 bg-white p-3 rounded-lg border border-slate-200 flex items-center justify-between">
                   <div>
                     <span className="font-bold text-slate-900 block">رقم المشرف الأساسي (الإدارة الأولى):</span>
-                    <span className="font-mono text-slate-600" dir="ltr">{settings.adminPhone || 'لم يتم إدخال رقم بعد في الإعدادات'}</span>
+                    <span className="font-mono text-slate-600" dir="ltr">{settings.adminPhone || 'لم يتم إدخال رقم بعد'}</span>
                   </div>
-                  <span className="text-[11px] text-emerald-700 bg-emerald-50 px-2 py-1 rounded font-bold">
-                    {settings.adminPhone ? 'جاهز للفحص' : 'تنبيه: أضف الرقم في الإعدادات'}
-                  </span>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab('contact')}
+                      className="text-[11px] text-emerald-700 bg-emerald-50 hover:bg-emerald-100 px-2 py-1 rounded font-bold border border-emerald-200 transition"
+                    >
+                      تعديل الرقم
+                    </button>
+                    <span className="text-[11px] text-emerald-700 bg-emerald-50 px-2 py-1 rounded font-bold">
+                      {settings.adminPhone ? 'جاهز للفحص' : 'تنبيه: أضف الرقم'}
+                    </span>
+                  </div>
                 </div>
               )}
 
@@ -527,11 +752,20 @@ export const WhatsAppTestModal: React.FC<WhatsAppTestModalProps> = ({
                 <div className="text-xs text-slate-600 bg-white p-3 rounded-lg border border-slate-200 flex items-center justify-between">
                   <div>
                     <span className="font-bold text-slate-900 block">رقم إدارة التصعيد الثاني (التأخير الحرج):</span>
-                    <span className="font-mono text-slate-600" dir="ltr">{settings.adminPhone2 || 'لم يتم إدخال رقم بعد في الإعدادات'}</span>
+                    <span className="font-mono text-slate-600" dir="ltr">{settings.adminPhone2 || 'لم يتم إدخال رقم بعد'}</span>
                   </div>
-                  <span className="text-[11px] text-emerald-700 bg-emerald-50 px-2 py-1 rounded font-bold">
-                    {settings.adminPhone2 ? 'جاهز للفحص' : 'تنبيه: أضف الرقم في الإعدادات'}
-                  </span>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab('contact')}
+                      className="text-[11px] text-rose-700 bg-rose-50 hover:bg-rose-100 px-2 py-1 rounded font-bold border border-rose-200 transition"
+                    >
+                      تعديل الرقم
+                    </button>
+                    <span className="text-[11px] text-emerald-700 bg-emerald-50 px-2 py-1 rounded font-bold">
+                      {settings.adminPhone2 ? 'جاهز للفحص' : 'تنبيه: أضف الرقم'}
+                    </span>
+                  </div>
                 </div>
               )}
 
@@ -561,28 +795,47 @@ export const WhatsAppTestModal: React.FC<WhatsAppTestModalProps> = ({
               )}
 
               {recipientType === 'custom' && (
-                <div className="grid grid-cols-2 gap-2">
-                  <div>
-                    <label className="text-[11px] text-slate-600 font-bold block mb-1">اسم المستلم:</label>
-                    <input
-                      type="text"
-                      value={customName}
-                      onChange={(e) => setCustomName(e.target.value)}
-                      placeholder="مثال: مشرف التوصيل"
-                      className="w-full text-xs font-medium p-2 bg-white border border-slate-300 rounded-lg"
-                    />
+                <div className="space-y-2">
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="text-[11px] text-slate-600 font-bold block mb-1">اسم المستلم:</label>
+                      <input
+                        type="text"
+                        value={customName}
+                        onChange={(e) => setCustomName(e.target.value)}
+                        placeholder="مثال: مشرف التوصيل"
+                        className="w-full text-xs font-medium p-2 bg-white border border-slate-300 rounded-lg"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[11px] text-slate-600 font-bold block mb-1">رقم الواتساب مع المفتاح الدولي:</label>
+                      <input
+                        type="text"
+                        value={customPhone}
+                        onChange={(e) => setCustomPhone(e.target.value)}
+                        placeholder="9665xxxxxxxx"
+                        className="w-full text-xs font-medium p-2 bg-white border border-slate-300 rounded-lg font-mono"
+                        dir="ltr"
+                      />
+                    </div>
                   </div>
-                  <div>
-                    <label className="text-[11px] text-slate-600 font-bold block mb-1">رقم الواتساب مع المفتاح الدولي:</label>
-                    <input
-                      type="text"
-                      value={customPhone}
-                      onChange={(e) => setCustomPhone(e.target.value)}
-                      placeholder="9665xxxxxxxx"
-                      className="w-full text-xs font-medium p-2 bg-white border border-slate-300 rounded-lg font-mono"
-                      dir="ltr"
-                    />
-                  </div>
+
+                  {customPhone.trim() && (
+                    <div className="flex items-center justify-between p-2.5 bg-emerald-50 border border-emerald-200 rounded-lg">
+                      <span className="text-[11px] text-emerald-800 font-semibold">
+                        هل تريد اعتماد هذا الرقم كرقم واتساب أساسي للإدارة وحفظه؟
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => handleSaveContactFromModal({ adminPhone: customPhone, adminName: customName })}
+                        disabled={isSavingContact}
+                        className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-[11px] font-bold transition flex items-center gap-1 shrink-0"
+                      >
+                        <Save className="w-3 h-3" />
+                        <span>{contactSaved ? 'تم الحفظ!' : 'حفظ الرقم للإدارة'}</span>
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
 
