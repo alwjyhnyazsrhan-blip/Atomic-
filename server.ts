@@ -12,6 +12,7 @@ import makeWASocket, {
 import { 
   Courier, 
   Order, 
+  OrderStatus,
   SystemSettings, 
   AlertLog, 
   DailyReportSummary, 
@@ -807,11 +808,17 @@ app.delete('/api/couriers/:id', (req: Request, res: Response) => {
 
 // 3. Orders & Live Locat Fetching / Sync
 app.get('/api/orders', (req: Request, res: Response) => {
-  // Update counts and evaluate delay
+  // Update dynamic elapsed times and delay status for live ongoing orders
   orders.forEach((order) => {
-    order.isDelayed = order.elapsedMinutes >= settings.delayThresholdMinutes;
-    if (order.isDelayed && order.status !== 'delayed' && order.status !== 'delivered') {
-      order.status = 'delayed';
+    if (!order.isDelivered && !order.isCanceled && (order.assignedAt || order.createdAt)) {
+      const startTime = new Date(order.assignedAt || order.createdAt).getTime();
+      order.elapsedMinutes = Math.max(0, Math.floor((Date.now() - startTime) / 60000));
+      order.isDelayed = order.elapsedMinutes >= settings.delayThresholdMinutes;
+      if (order.isDelayed) {
+        order.status = 'delayed';
+      } else {
+        order.status = 'in_transit';
+      }
     }
   });
   res.json({ success: true, orders, delayThreshold: settings.delayThresholdMinutes });
@@ -1503,11 +1510,18 @@ async function executeLocatCloudSync(): Promise<{ success: boolean; count: numbe
     let alertsGenerated = 0;
     let newlyDelayedCount = 0;
 
+    const syncedOrders: Order[] = [];
+    const seenOrderIds = new Set<string>();
+
     rawList.forEach((item: any) => {
       const isDelivered = Boolean(item.isDelivered);
       const isCanceled = Boolean(item.isCanceled);
       const rawNum = item.order_number || item.orderNumber || item._id || item.id || '';
-      const orderId = rawNum ? (String(rawNum).startsWith('#') ? String(rawNum) : `#${rawNum}`) : `#LOC-${Math.floor(1000 + Math.random() * 9000)}`;
+      // Retain exact Locate order format (e.g. L22295770)
+      const orderId = rawNum ? String(rawNum).trim() : `LOC-${Math.floor(1000 + Math.random() * 9000)}`;
+
+      if (seenOrderIds.has(orderId)) return;
+      seenOrderIds.add(orderId);
 
       const driverId = String(item.driver_id || item.driverId || '').trim();
       const driverName = String(item.driver_name || item.driverName || item.delegate || item.driver?.name || '').trim();
@@ -1550,7 +1564,7 @@ async function executeLocatCloudSync(): Promise<{ success: boolean; count: numbe
         elapsedMinutes = item.elapsed_minutes;
       }
 
-      const isDelayed = elapsedMinutes >= settings.delayThresholdMinutes;
+      const isDelayed = !isDelivered && !isCanceled && elapsedMinutes >= settings.delayThresholdMinutes;
 
       let orderStatus: OrderStatus = 'in_transit';
       if (isCanceled) {
@@ -1568,71 +1582,53 @@ async function executeLocatCloudSync(): Promise<{ success: boolean; count: numbe
       const restaurant = item.store_name || item.storeName || item.merchant_name || item.restaurant_name || 'متجر لوكيت';
       const address = item.customer_address || item.customerAddress || item.customer_city || item.address || item.city || '';
 
-      const existingOrderIndex = orders.findIndex((o) => o.id === orderId);
-      if (existingOrderIndex !== -1) {
-        const existing = orders[existingOrderIndex];
-        existing.status = orderStatus;
-        existing.elapsedMinutes = elapsedMinutes;
-        existing.isDelayed = isDelayed;
-        existing.restaurant = restaurant;
-        existing.customerAddress = address;
-        existing.customerCoordinates = item.customer_coordinates || existing.customerCoordinates;
-        existing.deliveryCost = String(item.delivery_cost || existing.deliveryCost || '');
-        existing.paymentMethod = item.payment_method || existing.paymentMethod;
-        existing.locateMongoId = item._id || existing.locateMongoId;
-        existing.assignedAt = item.assigned_at || existing.assignedAt;
-        existing.deliveryTime = item.delivery_time || existing.deliveryTime;
-        existing.createdAt = item.created_at || existing.createdAt;
-        existing.isDelivered = isDelivered;
-        existing.isCanceled = isCanceled;
-        existing.courierId = matchedCourier?.id || existing.courierId;
-        existing.courierName = courierDisplayName;
-        if (courierPhone && (!existing.courierPhone || existing.courierPhone.length < 10)) {
-          existing.courierPhone = courierPhone;
-        }
-        existing.lastUpdated = new Date().toISOString();
+      // Find previously tracked state to preserve alerts already sent
+      const existing = orders.find((o) => o.id === orderId || o.id === `#${orderId}` || (item._id && o.locateMongoId === item._id));
 
-        if (!isDelivered && !isCanceled && isDelayed && (!existing.alertSentToCourier || !existing.alertSentToAdmin)) {
-          triggerAlertsForOrder(existing);
-          alertsGenerated++;
-          newlyDelayedCount++;
-        }
-      } else {
-        const newOrder: Order = {
-          id: orderId,
-          locateMongoId: item._id,
-          locatAccount: driverId || driverName,
-          courierId: matchedCourier?.id,
-          courierName: courierDisplayName,
-          courierPhone: courierPhone,
-          restaurant,
-          customerAddress: address,
-          customerCoordinates: item.customer_coordinates || '',
-          deliveryCost: String(item.delivery_cost || ''),
-          paymentMethod: item.payment_method || '',
-          pickupTime: timeStart ? new Date(timeStart).toLocaleTimeString('ar-SA', { hour: '2-digit', minute: '2-digit' }) : new Date().toLocaleTimeString('ar-SA'),
-          assignedAt: item.assigned_at,
-          deliveryTime: item.delivery_time,
-          createdAt: item.created_at,
-          isDelivered,
-          isCanceled,
-          elapsedMinutes,
-          status: orderStatus,
-          isDelayed,
-          alertSentToCourier: false,
-          alertSentToAdmin: false,
-          activeOrdersHeldByCourier: 1,
-          lastUpdated: new Date().toISOString(),
-        };
+      const orderRecord: Order = {
+        id: orderId,
+        locateMongoId: item._id || existing?.locateMongoId,
+        locatAccount: driverId || driverName,
+        courierId: matchedCourier?.id || existing?.courierId,
+        courierName: courierDisplayName,
+        courierPhone: courierPhone || existing?.courierPhone || '',
+        restaurant,
+        customerAddress: address,
+        customerCoordinates: item.customer_coordinates || existing?.customerCoordinates || '',
+        deliveryCost: String(item.delivery_cost || existing?.deliveryCost || ''),
+        paymentMethod: item.payment_method || existing?.paymentMethod || 'Card',
+        pickupTime: timeStart ? new Date(timeStart).toLocaleTimeString('ar-SA', { timeZone: 'Asia/Riyadh', hour: '2-digit', minute: '2-digit' }) : (existing?.pickupTime || ''),
+        assignedAt: item.assigned_at || existing?.assignedAt,
+        deliveryTime: item.delivery_time || existing?.deliveryTime,
+        createdAt: item.created_at || existing?.createdAt,
+        isDelivered,
+        isCanceled,
+        elapsedMinutes,
+        status: orderStatus,
+        isDelayed,
+        alertSentToCourier: existing ? existing.alertSentToCourier : false,
+        alertSentToAdmin: existing ? existing.alertSentToAdmin : false,
+        activeOrdersHeldByCourier: 1,
+        lastUpdated: new Date().toISOString(),
+      };
 
-        if (!isDelivered && !isCanceled && isDelayed) {
-          triggerAlertsForOrder(newOrder);
-          alertsGenerated++;
-          newlyDelayedCount++;
-        }
-
-        orders.unshift(newOrder);
+      if (!isDelivered && !isCanceled && isDelayed && (!orderRecord.alertSentToCourier || !orderRecord.alertSentToAdmin)) {
+        triggerAlertsForOrder(orderRecord);
+        alertsGenerated++;
+        newlyDelayedCount++;
       }
+
+      syncedOrders.push(orderRecord);
+    });
+
+    // Replace orders with strictly synchronized Locate dataset
+    orders = syncedOrders;
+
+    // Ensure orders are strictly sorted by creation time descending (newest on top, exactly like Locate)
+    orders.sort((a, b) => {
+      const timeA = a.createdAt || a.assignedAt || a.pickupTime || '';
+      const timeB = b.createdAt || b.assignedAt || b.pickupTime || '';
+      return new Date(timeB).getTime() - new Date(timeA).getTime();
     });
 
     // Update activeOrdersCount and delivered count for all couriers

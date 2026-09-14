@@ -21,11 +21,17 @@ import {
   Zap,
   RotateCw,
   Sliders,
-  CheckCircle
+  CheckCircle,
+  LayoutGrid,
+  Table as TableIcon,
+  DollarSign,
+  CreditCard,
+  Phone
 } from 'lucide-react';
 import { Order, Courier, SystemSettings, CloudSyncState } from '../types';
 import { WhatsAppTestModal } from './WhatsAppTestModal';
 import { AntiBanQueueModal } from './AntiBanQueueModal';
+import { LocateOrdersTable } from './LocateOrdersTable';
 
 interface LiveOrdersViewProps {
   orders: Order[];
@@ -93,6 +99,7 @@ export const LiveOrdersView: React.FC<LiveOrdersViewProps> = ({
 }) => {
   const [filter, setFilter] = useState<'all' | 'active' | 'delayed' | 'delivered'>('all');
   const [searchQuery, setSearchQuery] = useState('');
+  const [viewMode, setViewMode] = useState<'table' | 'cards'>('table');
   const [isWhatsAppTestModalOpen, setIsWhatsAppTestModalOpen] = useState(false);
   const [isQueueModalOpen, setIsQueueModalOpen] = useState(false);
 
@@ -325,30 +332,58 @@ export const LiveOrdersView: React.FC<LiveOrdersViewProps> = ({
         </div>
 
         <div className="flex items-center gap-2">
+          {/* View Mode Switcher: Table (Locate Platform Style) vs Cards */}
+          <div className="flex items-center bg-slate-100 p-1 rounded-lg border border-slate-200">
+            <button
+              onClick={() => setViewMode('table')}
+              className={`px-2.5 py-1 text-xs font-semibold rounded-md transition flex items-center gap-1.5 ${
+                viewMode === 'table'
+                  ? 'bg-white text-emerald-800 shadow-2xs font-bold'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+              title="جدول مطابق لمنصة لوكيت (Locate Orders Table)"
+            >
+              <TableIcon className="w-3.5 h-3.5" />
+              <span>جدول لوكيت</span>
+            </button>
+            <button
+              onClick={() => setViewMode('cards')}
+              className={`px-2.5 py-1 text-xs font-semibold rounded-md transition flex items-center gap-1.5 ${
+                viewMode === 'cards'
+                  ? 'bg-white text-emerald-800 shadow-2xs font-bold'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+              title="بطاقات المراقبة الحية"
+            >
+              <LayoutGrid className="w-3.5 h-3.5" />
+              <span>بطاقات</span>
+            </button>
+          </div>
+
           <button
             onClick={() => setIsQueueModalOpen(true)}
-            className="px-3.5 py-1.5 rounded-lg text-xs font-bold text-slate-800 bg-white hover:bg-slate-50 border border-slate-300 transition flex items-center gap-1.5 shadow-2xs"
+            className="px-3 py-1.5 rounded-lg text-xs font-bold text-slate-800 bg-white hover:bg-slate-50 border border-slate-300 transition flex items-center gap-1.5 shadow-2xs"
             title="نظام طابور حماية الواتساب من الحظر وتفاصيل تشغيل VPS"
           >
             <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
-            <span>طابور الحماية من الحظر</span>
+            <span className="hidden sm:inline">حماية الواتساب</span>
           </button>
 
           <button
             onClick={() => setIsWhatsAppTestModalOpen(true)}
-            className="px-3.5 py-1.5 rounded-lg text-xs font-bold text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 transition flex items-center gap-1.5 shadow-2xs"
+            className="px-3 py-1.5 rounded-lg text-xs font-bold text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 transition flex items-center gap-1.5 shadow-2xs"
             title="فحص كود إرسال الواتساب واستخراج QR Code في التيرمينال واللوحة"
           >
             <QrCode className="w-3.5 h-3.5 text-emerald-600" />
-            <span>اختبار إرسال تنبيه الواتساب المباشر</span>
+            <span className="hidden sm:inline">فحص الواتساب</span>
           </button>
 
           <button
             onClick={onOpenAddOrderModal}
-            className="px-3.5 py-1.5 rounded-lg text-xs font-bold text-white bg-slate-900 hover:bg-slate-800 transition flex items-center gap-1.5 shadow-2xs"
+            className="px-3 py-1.5 rounded-lg text-xs font-bold text-white bg-slate-900 hover:bg-slate-800 transition flex items-center gap-1.5 shadow-2xs"
           >
             <Plus className="w-3.5 h-3.5" />
-            <span>إضافة / لصق طلبات من لوكيت</span>
+            <span>إضافة طلب</span>
           </button>
         </div>
       </div>
@@ -382,6 +417,13 @@ export const LiveOrdersView: React.FC<LiveOrdersViewProps> = ({
             </button>
           )}
         </div>
+      ) : viewMode === 'table' ? (
+        <LocateOrdersTable
+          orders={filteredOrders}
+          couriers={couriers}
+          settings={settings}
+          onTriggerManualAlert={onTriggerManualAlert}
+        />
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {filteredOrders.map((order) => {

@@ -16,7 +16,8 @@ import {
   Tag,
   Plus,
   AlertTriangle,
-  Info
+  Info,
+  UserCheck
 } from 'lucide-react';
 import { Courier, Order } from '../types';
 
@@ -99,30 +100,19 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
         </button>
       </div>
 
-      {/* Helpful Guidance Card for User */}
-      <div className="bg-amber-50/90 border border-amber-200/90 rounded-xl p-4 text-amber-950 text-xs shadow-2xs flex items-start gap-3">
-        <div className="w-6 h-6 rounded-lg bg-amber-500 text-white flex items-center justify-center shrink-0 font-bold text-xs mt-0.5 shadow-xs">
-          <Info className="w-4 h-4" />
-        </div>
-        <div className="space-y-1">
-          <div className="font-bold text-xs text-amber-950 flex items-center gap-2">
-            <span>كيف تظهر الطلبات الجارية للمندوب بعد تسجيله؟</span>
-            <span className="text-2xs bg-amber-200/70 text-amber-800 px-2 py-0.5 rounded-full font-semibold">خطوتان بسيطتان</span>
+      {/* Locate Direct Auto-Sync Banner */}
+      <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 text-emerald-950 text-xs shadow-2xs flex items-center justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <div className="w-8 h-8 rounded-lg bg-emerald-600 text-white flex items-center justify-center shrink-0 font-bold text-xs shadow-xs">
+            <UserCheck className="w-4 h-4" />
           </div>
-          <div className="text-[11px] text-amber-900 leading-relaxed space-y-1">
-            <p>
-              تسجيل المندوب هنا يحفظ <strong>ملفه التعريفي ورقم واتسابه</strong>. لتظهر الطلبات الجارية بحوزته في النظام:
+          <div>
+            <h4 className="font-bold text-xs sm:text-sm text-emerald-900">
+              جميع المناديب ({couriers.length} مندوب) مسحوبين مباشرة من حسابك في لوكيت ومطابقين تماماً
+            </h4>
+            <p className="text-[11px] text-emerald-700 mt-0.5">
+              يتم سحب وتحديث الأسماء، أرقام الجوال، أرقام الهويات الوطنية، وحالات الاتصال لحظياً مع المنصة بدون أي نقص.
             </p>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1 text-slate-800">
-              <div className="bg-white/80 p-2.5 rounded-lg border border-amber-200/70">
-                <span className="font-bold text-emerald-800 block mb-0.5">1. آلياً من شاشة لوكيت:</span>
-                شغّل سكربت السحب في المتصفح على (<code className="font-mono text-2xs bg-slate-100 px-1 py-0.5 rounded text-emerald-700">supplier.locate.sa/orders</code>) وسيقوم بقراءة الطلبات وإسنادها للمناديب تلقائياً كل 30 ثانية.
-              </div>
-              <div className="bg-white/80 p-2.5 rounded-lg border border-amber-200/70">
-                <span className="font-bold text-indigo-800 block mb-0.5">2. يدوياً / فورياً:</span>
-                اضغط على زر <strong>[➕ إسناد طلب]</strong> في بطاقة أي مندوب أدناه لإدخال رقم طلبه والوقت المنقضي لتجربة التنبيه فوراً.
-              </div>
-            </div>
           </div>
         </div>
       </div>
