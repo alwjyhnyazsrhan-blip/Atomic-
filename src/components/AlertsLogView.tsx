@@ -159,6 +159,7 @@ export const AlertsLogView: React.FC<AlertsLogViewProps> = ({
           {filtered.map((alert) => {
             const isCourier = alert.recipientType === 'courier';
             const timeStr = new Date(alert.timestamp).toLocaleTimeString('ar-SA', {
+              timeZone: 'Asia/Riyadh',
               hour: '2-digit',
               minute: '2-digit',
               second: '2-digit',

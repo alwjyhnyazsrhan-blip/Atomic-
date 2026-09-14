@@ -135,6 +135,30 @@ export default function App() {
   // Trigger manual WhatsApp alert
   const handleTriggerManualAlert = async (orderId: string, target: 'courier' | 'admin' | 'admin2' | 'both') => {
     try {
+      const nowRiyadh = new Date().toLocaleTimeString('ar-SA', {
+        timeZone: 'Asia/Riyadh',
+        hour: '2-digit',
+        minute: '2-digit',
+      });
+
+      // Optimistic instant state update with accurate Riyadh local time
+      setOrders((prev) =>
+        prev.map((o) => {
+          if (o.id === orderId) {
+            return {
+              ...o,
+              alertSentToCourier: target === 'courier' || target === 'both' ? true : o.alertSentToCourier,
+              courierAlertTime: target === 'courier' || target === 'both' ? nowRiyadh : o.courierAlertTime,
+              alertSentToAdmin: target === 'admin' || target === 'both' ? true : o.alertSentToAdmin,
+              adminAlertTime: target === 'admin' || target === 'both' ? nowRiyadh : o.adminAlertTime,
+              alertSentToAdmin2: target === 'admin2' ? true : o.alertSentToAdmin2,
+              admin2AlertTime: target === 'admin2' ? nowRiyadh : o.admin2AlertTime,
+            };
+          }
+          return o;
+        })
+      );
+
       const res = await fetch('/api/alerts/trigger-manual', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

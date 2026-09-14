@@ -200,14 +200,25 @@ export const LocateOrdersTable: React.FC<LocateOrdersTableProps> = ({
               const courierPhone = courier?.phone || order.courierPhone;
               const cleanPhone = courierPhone.replace(/[^0-9]/g, '');
 
+              const nowSaudiTime = new Date().toLocaleTimeString('ar-SA', {
+                timeZone: 'Asia/Riyadh',
+                hour: '2-digit',
+                minute: '2-digit',
+              });
+              const isDelivered = order.isDelivered || order.status === 'delivered';
+
               const courierWaMsg = encodeURIComponent(
-                `السلام عليكم أخي ${order.courierName}،\nنود تذكيرك بأن الطلب ${order.id} متأخر وتجاوز ${order.elapsedMinutes} دقيقة من وقت الاستلام.\nيرجى سرعة التسليم والإفادة.`
+                isDelivered
+                  ? `السلام عليكم أخي ${order.courierName}،\nبخصوص الطلب ${order.id} (مسلّم):\n• المطعم: ${order.restaurant}\n• المدة المستغرقة: ${order.elapsedMinutes} دقيقة\n• وقت الاستلام: ${order.pickupTime || '-'}\n• وقت الإشعار: ${nowSaudiTime}\nشكراً لجهودك!`
+                  : `السلام عليكم أخي ${order.courierName}،\nنود تذكيرك بأن الطلب ${order.id} متأخر وتجاوز ${order.elapsedMinutes} دقيقة منذ الاستلام.\n• وقت الاستلام: ${order.pickupTime || '-'}\n• وقت التنبيه: ${nowSaudiTime}\n• المطعم: ${order.restaurant}\nيرجى سرعة التسليم والإفادة.`
               );
               const courierWaUrl = `https://wa.me/${cleanPhone}?text=${courierWaMsg}`;
 
               const adminCleanPhone = settings.adminPhone.replace(/[^0-9]/g, '');
               const adminWaMsg = encodeURIComponent(
-                `⚠️ [تنبيه تأخير - لوكيت]\nالطلب: ${order.id}\nالمندوب: ${order.courierName}\nالوقت: ${order.elapsedMinutes} دقيقة`
+                isDelivered
+                  ? `ℹ️ [إشعار طلب مسلّم - لوكيت]\n• الطلب: ${order.id}\n• المندوب: ${order.courierName}\n• الحالة: تم التسليم\n• المدة المستغرقة: ${order.elapsedMinutes} دقيقة\n• وقت الاستلام: ${order.pickupTime || '-'}\n• وقت الإشعار: ${nowSaudiTime}\n• المطعم: ${order.restaurant}`
+                  : `⚠️ [تنبيه تأخير - لوكيت]\n• الطلب: ${order.id}\n• المندوب: ${order.courierName}\n• المدة المستغرقة: ${order.elapsedMinutes} دقيقة\n• وقت الاستلام: ${order.pickupTime || '-'}\n• وقت التنبيه: ${nowSaudiTime}\n• عدد طلباته النشطة: ${order.activeOrdersHeldByCourier} طلبات\n• المطعم: ${order.restaurant}`
               );
               const adminWaUrl = `https://wa.me/${adminCleanPhone}?text=${adminWaMsg}`;
 

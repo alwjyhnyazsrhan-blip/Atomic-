@@ -145,7 +145,7 @@ export const LiveOrdersView: React.FC<LiveOrdersViewProps> = ({
               </div>
               <p className="text-xs text-emerald-700 mt-0.5">
                 {cloudSyncState.lastSyncTime
-                  ? `آخر سحب ناجح: ${new Date(cloudSyncState.lastSyncTime).toLocaleTimeString('ar-SA')} | تم سحب ${cloudSyncState.lastCouriersCount || couriers.length} مندوب و ${cloudSyncState.lastOrdersCount || orders.length} طلب (${cloudSyncState.activeOrdersCount || activeOrders.length} نشط) | فحص آلي كل ${settings.locatSyncIntervalSeconds || 20} ثانية`
+                  ? `آخر سحب ناجح: ${new Date(cloudSyncState.lastSyncTime).toLocaleTimeString('ar-SA', { timeZone: 'Asia/Riyadh', hour: '2-digit', minute: '2-digit' })} | تم سحب ${cloudSyncState.lastCouriersCount || couriers.length} مندوب و ${cloudSyncState.lastOrdersCount || orders.length} طلب (${cloudSyncState.activeOrdersCount || activeOrders.length} نشط) | فحص آلي كل ${settings.locatSyncIntervalSeconds || 20} ثانية`
                   : `يقوم الخادم بالاتصال المباشر بـ Locate وسحب ومراقبة المناديب والطلبات تلقائياً كل ${settings.locatSyncIntervalSeconds || 20} ثانية`}
               </p>
               {cloudSyncState.lastError && (
@@ -432,20 +432,31 @@ export const LiveOrdersView: React.FC<LiveOrdersViewProps> = ({
             const courierPhone = courier?.phone || order.courierPhone;
             const cleanPhone = courierPhone.replace(/[^0-9]/g, '');
 
+            const nowSaudiTime = new Date().toLocaleTimeString('ar-SA', {
+              timeZone: 'Asia/Riyadh',
+              hour: '2-digit',
+              minute: '2-digit',
+            });
+            const isDelivered = order.isDelivered || order.status === 'delivered';
+
             const courierWaMsg = encodeURIComponent(
-              `السلام عليكم أخي ${order.courierName}،\nنود تذكيرك بأن الطلب ${order.id} متأخر وتجاوز ${order.elapsedMinutes} دقيقة من وقت الاستلام.\nالمطعم: ${order.restaurant}\nيرجى سرعة التسليم والإفادة.`
+              isDelivered
+                ? `السلام عليكم أخي ${order.courierName}،\nبخصوص الطلب ${order.id} (مسلّم):\n• المطعم: ${order.restaurant}\n• المدة المستغرقة: ${order.elapsedMinutes} دقيقة\n• وقت الاستلام: ${order.pickupTime || '-'}\n• وقت الإشعار: ${nowSaudiTime}\nشكراً لجهودك!`
+                : `السلام عليكم أخي ${order.courierName}،\nنود تذكيرك بأن الطلب ${order.id} متأخر وتجاوز ${order.elapsedMinutes} دقيقة منذ الاستلام.\n• وقت الاستلام: ${order.pickupTime || '-'}\n• وقت التنبيه: ${nowSaudiTime}\n• المطعم: ${order.restaurant}\nيرجى سرعة التسليم والإفادة.`
             );
             const courierWaUrl = `https://wa.me/${cleanPhone}?text=${courierWaMsg}`;
 
             const adminCleanPhone = settings.adminPhone.replace(/[^0-9]/g, '');
             const adminWaMsg = encodeURIComponent(
-              `⚠️ [تنبيه تأخير - لوكيت]\nالطلب: ${order.id}\nالمندوب: ${order.courierName}\nالوقت: ${order.elapsedMinutes} دقيقة\nعدد طلباته النشطة: ${order.activeOrdersHeldByCourier} طلبات\nالمطعم: ${order.restaurant}`
+              isDelivered
+                ? `ℹ️ [إشعار طلب مسلّم - لوكيت]\n• الطلب: ${order.id}\n• المندوب: ${order.courierName}\n• الحالة: تم التسليم\n• المدة المستغرقة: ${order.elapsedMinutes} دقيقة\n• وقت الاستلام: ${order.pickupTime || '-'}\n• وقت الإشعار: ${nowSaudiTime}\n• المطعم: ${order.restaurant}`
+                : `⚠️ [تنبيه تأخير - لوكيت]\n• الطلب: ${order.id}\n• المندوب: ${order.courierName}\n• المدة المستغرقة: ${order.elapsedMinutes} دقيقة\n• وقت الاستلام: ${order.pickupTime || '-'}\n• وقت التنبيه: ${nowSaudiTime}\n• عدد طلباته النشطة: ${order.activeOrdersHeldByCourier} طلبات\n• المطعم: ${order.restaurant}`
             );
             const adminWaUrl = `https://wa.me/${adminCleanPhone}?text=${adminWaMsg}`;
 
             const admin2CleanPhone = (settings.adminPhone2 || '').replace(/[^0-9]/g, '');
             const admin2WaMsg = encodeURIComponent(
-              `🚨 [تصعيد تأخير حرج - إشعار الإدارة الثانية]\n• اسم المندوب: ${order.courierName}\n• رقم الطلب: ${order.id}\n• الوقت المنقضي: ${order.elapsedMinutes} دقيقة\n• عدد الطلبات النشطة بحوزته: ${order.activeOrdersHeldByCourier} طلبات\n• المطعم: ${order.restaurant}\n⚠️ تنبيه: استمر التأخير وتجاوز حد التصعيد (${settings.criticalDelayMinutes} دقيقة).`
+              `🚨 [تصعيد تأخير حرج - إشعار الإدارة الثانية]\n• اسم المندوب: ${order.courierName}\n• رقم الطلب: ${order.id}\n• وقت الاستلام: ${order.pickupTime || '-'}\n• المدة المستغرقة: ${order.elapsedMinutes} دقيقة\n• وقت التصعيد: ${nowSaudiTime}\n• عدد الطلبات النشطة بحوزته: ${order.activeOrdersHeldByCourier} طلبات\n• المطعم: ${order.restaurant}\n⚠️ تنبيه: استمر التأخير وتجاوز حد التصعيد (${settings.criticalDelayMinutes} دقيقة).`
             );
             const admin2WaUrl = `https://wa.me/${admin2CleanPhone}?text=${admin2WaMsg}`;
 

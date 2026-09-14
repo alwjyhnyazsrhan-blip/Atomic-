@@ -329,7 +329,7 @@ export const AntiBanQueueModal: React.FC<AntiBanQueueModalProps> = ({
               </p>
               <div className="flex items-center justify-between pt-1">
                 <div className="text-[11px] text-slate-500">
-                  آخر عملية سحب: <strong>{puppeteerStatus.lastScrapeTime ? new Date(puppeteerStatus.lastScrapeTime).toLocaleTimeString('ar-SA') : 'لم تُنفذ بعد'}</strong> (تم استخراج {puppeteerStatus.lastScrapedCount} طلب)
+                  آخر عملية سحب: <strong>{puppeteerStatus.lastScrapeTime ? new Date(puppeteerStatus.lastScrapeTime).toLocaleTimeString('ar-SA', { timeZone: 'Asia/Riyadh', hour: '2-digit', minute: '2-digit' }) : 'لم تُنفذ بعد'}</strong> (تم استخراج {puppeteerStatus.lastScrapedCount} طلب)
                 </div>
                 <button
                   onClick={handleTriggerScrape}

@@ -346,19 +346,44 @@ function formatPhoneForWhatsApp(phone: string): string {
   return phone.replace(/[^0-9]/g, '');
 }
 
+// Helper: Get Saudi Arabia (Asia/Riyadh - GMT+3) formatted time string
+function getRiyadhTimeString(date: Date = new Date(), options?: Intl.DateTimeFormatOptions): string {
+  return date.toLocaleTimeString('ar-SA', {
+    timeZone: 'Asia/Riyadh',
+    hour: '2-digit',
+    minute: '2-digit',
+    ...options,
+  });
+}
+
 // Helper: Construct Courier Message
 function buildCourierMessage(order: Order, courierName: string): string {
-  return `السلام عليكم أخي ${courierName}،\nنود تذكيرك بأن الطلب ${order.id} متأخر وتجاوز ${order.elapsedMinutes} دقيقة منذ الاستلام (وقت الاستلام: ${order.pickupTime || 'غير محدد'}).\nالمطعم: ${order.restaurant}\nالعميل: ${order.customerAddress || 'الوجهة المحددة'}\nيرجى سرعة تسليم الطلب للعميل والإفادة بأسباب التأخير وحالة التوصيل الحالية. شاكرين تعاونك!`;
+  const isDelivered = order.isDelivered || order.status === 'delivered';
+  const riyadhNow = getRiyadhTimeString();
+
+  if (isDelivered) {
+    return `السلام عليكم أخي ${courierName}،\nبخصوص الطلب ${order.id} (المسلّم):\n• المطعم: ${order.restaurant}\n• المدة المستغرقة: ${order.elapsedMinutes} دقيقة\n• وقت الاستلام: ${order.pickupTime || 'غير محدد'}\n• وقت الإشعار: ${riyadhNow}\nشكراً لجهودك!`;
+  }
+
+  return `السلام عليكم أخي ${courierName}،\nنود تذكيرك بأن الطلب ${order.id} متأخر وتجاوز ${order.elapsedMinutes} دقيقة منذ الاستلام.\n• وقت الاستلام: ${order.pickupTime || 'غير محدد'}\n• وقت التنبيه: ${riyadhNow}\n• المطعم: ${order.restaurant}\n• العميل: ${order.customerAddress || 'الوجهة المحددة'}\nيرجى سرعة تسليم الطلب للعميل والإفادة بحالة التوصيل الحالية. شاكرين تعاونك!`;
 }
 
 // Helper: Construct Admin Alert Message
 function buildAdminMessage(order: Order, courierName: string, activeCount: number): string {
-  return `🚨 [تنبيه تأخير طلب - لوكيت]\n• رقم الطلب: ${order.id}\n• المندوب: ${courierName}\n• الوقت المنقضي: ${order.elapsedMinutes} دقيقة (الحد المسموح: ${settings.delayThresholdMinutes} دقيقة)\n• وقت الاستلام: ${order.pickupTime || 'غير محدد'}\n• عدد الطلبات النشطة بحوزته: ${activeCount} طلبات\n• المطعم: ${order.restaurant}\n• الحي: ${order.customerAddress || 'غير محدد'}\n• الوقت: ${new Date().toLocaleTimeString('ar-SA')}`;
+  const riyadhNow = getRiyadhTimeString();
+  const isDelivered = order.isDelivered || order.status === 'delivered';
+
+  if (isDelivered) {
+    return `ℹ️ [إشعار طلب مسلّم - لوكيت]\n• رقم الطلب: ${order.id}\n• المندوب: ${courierName}\n• الحالة: تم التسليم بنجاح\n• المدة المستغرقة: ${order.elapsedMinutes} دقيقة\n• وقت الاستلام: ${order.pickupTime || 'غير محدد'}\n• وقت الإشعار: ${riyadhNow}\n• المطعم: ${order.restaurant}`;
+  }
+
+  return `🚨 [تنبيه تأخير طلب - لوكيت]\n• رقم الطلب: ${order.id}\n• المندوب: ${courierName}\n• المدة المستغرقة: ${order.elapsedMinutes} دقيقة (الحد المسموح: ${settings.delayThresholdMinutes} دقيقة)\n• وقت الاستلام: ${order.pickupTime || 'غير محدد'}\n• وقت التنبيه: ${riyadhNow}\n• عدد الطلبات النشطة بحوزته: ${activeCount} طلبات\n• المطعم: ${order.restaurant}\n• الحي: ${order.customerAddress || 'غير محدد'}`;
 }
 
 // Helper: Construct Admin 2 Escalation Message upon continued delay
 function buildAdmin2Message(order: Order, courierName: string, courierPhone: string, activeCount: number): string {
-  return `🚨 [تصعيد تأخير حرج - إشعار الإدارة الثانية]\n• اسم المندوب: ${courierName}\n• جوال المندوب للتواصل المباشر: ${courierPhone || 'غير مسجل'}\n• رقم الطلب: ${order.id}\n• وقت الاستلام: ${order.pickupTime || 'غير محدد'}\n• الوقت المنقضي: ${order.elapsedMinutes} دقيقة\n• عدد الطلبات النشطة بحوزته: ${activeCount} طلبات\n• المطعم: ${order.restaurant}\n• الحي: ${order.customerAddress || 'غير محدد'}\n⚠️ تنبيه: استمر التأخير وتجاوز حد التصعيد الحرج (${settings.criticalDelayMinutes} دقيقة).\nيرجى التواصل الفوري مع المندوب عبر رقمه لمعرفة أسباب التأخير.`;
+  const riyadhNow = getRiyadhTimeString();
+  return `🚨 [تصعيد تأخير حرج - إشعار الإدارة الثانية]\n• اسم المندوب: ${courierName}\n• جوال المندوب للتواصل المباشر: ${courierPhone || 'غير مسجل'}\n• رقم الطلب: ${order.id}\n• وقت الاستلام: ${order.pickupTime || 'غير محدد'}\n• المدة المستغرقة: ${order.elapsedMinutes} دقيقة\n• وقت التصعيد: ${riyadhNow}\n• عدد الطلبات النشطة بحوزته: ${activeCount} طلبات\n• المطعم: ${order.restaurant}\n• الحي: ${order.customerAddress || 'غير محدد'}\n⚠️ تنبيه: استمر التأخير وتجاوز حد التصعيد الحرج (${settings.criticalDelayMinutes} دقيقة).\nيرجى التواصل الفوري مع المندوب عبر رقمه لمعرفة أسباب التأخير.`;
 }
 
 // Helper: Enqueue message safely with Anti-Ban delay & Cooldown protection
@@ -486,7 +511,7 @@ function triggerAlertsForOrder(order: Order) {
     const message = buildCourierMessage(order, courierName);
     enqueueAlert('courier', courierName, courierPhone, order.id, message, order.elapsedMinutes, activeCount);
     order.alertSentToCourier = true;
-    order.courierAlertTime = new Date().toLocaleTimeString('ar-SA', { hour: '2-digit', minute: '2-digit' });
+    order.courierAlertTime = getRiyadhTimeString();
   }
 
   // 2. Alert admin 1 if delayed and not sent yet
@@ -494,7 +519,7 @@ function triggerAlertsForOrder(order: Order) {
     const adminMsg = buildAdminMessage(order, courierName, activeCount);
     enqueueAlert('admin', settings.adminName || 'الإدارة الأولى', settings.adminPhone, order.id, adminMsg, order.elapsedMinutes, activeCount);
     order.alertSentToAdmin = true;
-    order.adminAlertTime = new Date().toLocaleTimeString('ar-SA', { hour: '2-digit', minute: '2-digit' });
+    order.adminAlertTime = getRiyadhTimeString();
   }
 
   // 3. Alert Admin 2 upon continued delay (Escalation logic)
@@ -507,7 +532,7 @@ function triggerAlertsForOrder(order: Order) {
     const admin2Msg = buildAdmin2Message(order, courierName, courierPhone, activeCount);
     enqueueAlert('admin2', settings.adminName2 || 'الإدارة الثانية (تصعيد)', settings.adminPhone2, order.id, admin2Msg, order.elapsedMinutes, activeCount);
     order.alertSentToAdmin2 = true;
-    order.admin2AlertTime = new Date().toLocaleTimeString('ar-SA', { hour: '2-digit', minute: '2-digit' });
+    order.admin2AlertTime = getRiyadhTimeString();
   }
 }
 
@@ -587,7 +612,7 @@ function generateDailyReport(): DailyReportSummary {
   // Format professional WhatsApp Text for Admin
   let waText = `📊 *تقرير أداء مناديب لوكيت اليومي*\n`;
   waText += `📅 *التاريخ:* ${today}\n`;
-  waText += `⏰ *وقت التوليد:* ${new Date().toLocaleTimeString('ar-SA')}\n`;
+  waText += `⏰ *وقت التوليد:* ${getRiyadhTimeString()}\n`;
   waText += `───────────────────────\n`;
   waText += `📈 *الملخص العام للأداء:*\n`;
   waText += `• إجمالي المناديب المسجلين: *${couriers.length}* مندوب\n`;
@@ -868,7 +893,7 @@ function ingestLiveOrders(liveOrders: any[], sourceName: string = 'Locat'): { co
         courierPhone: matchedCourier?.phone || incoming.courierPhone || '',
         restaurant: incoming.restaurant || 'مطعم شريك',
         customerAddress: incoming.customerAddress || 'الوجهة المحددة',
-        pickupTime: incoming.pickupTime || new Date().toLocaleTimeString('ar-SA', { hour: '2-digit', minute: '2-digit' }),
+        pickupTime: incoming.pickupTime || getRiyadhTimeString(),
         elapsedMinutes,
         status: isDelayed ? 'delayed' : (incoming.status || 'in_transit'),
         isDelayed,
@@ -975,7 +1000,7 @@ app.post('/api/alerts/trigger-manual', (req: Request, res: Response) => {
 
     enqueueAlert('courier', courierName, courierPhone, order.id, msg, order.elapsedMinutes, activeCount);
     order.alertSentToCourier = true;
-    order.courierAlertTime = new Date().toLocaleTimeString('ar-SA', { hour: '2-digit', minute: '2-digit' });
+    order.courierAlertTime = getRiyadhTimeString();
   }
 
   if (target === 'admin' || target === 'both') {
@@ -985,7 +1010,7 @@ app.post('/api/alerts/trigger-manual', (req: Request, res: Response) => {
 
     enqueueAlert('admin', settings.adminName || 'الإدارة الأولى', settings.adminPhone, order.id, adminMsg, order.elapsedMinutes, activeCount);
     order.alertSentToAdmin = true;
-    order.adminAlertTime = new Date().toLocaleTimeString('ar-SA', { hour: '2-digit', minute: '2-digit' });
+    order.adminAlertTime = getRiyadhTimeString();
   }
 
   if (target === 'admin2') {
@@ -995,7 +1020,7 @@ app.post('/api/alerts/trigger-manual', (req: Request, res: Response) => {
 
     enqueueAlert('admin2', settings.adminName2 || 'الإدارة الثانية', settings.adminPhone2, order.id, admin2Msg, order.elapsedMinutes, activeCount);
     order.alertSentToAdmin2 = true;
-    order.admin2AlertTime = new Date().toLocaleTimeString('ar-SA', { hour: '2-digit', minute: '2-digit' });
+    order.admin2AlertTime = getRiyadhTimeString();
   }
 
   res.json({
@@ -1109,7 +1134,7 @@ app.post('/api/whatsapp/send-test', async (req: Request, res: Response) => {
   }
 
   const cleanPhone = formatPhoneForWhatsApp(recipientPhone);
-  const textToSend = message || `مرحباً ${recipientName}،\nرسالة فحص مباشر من نظام أتمتة ومتابعة لوكيت.\nالتوقيت: ${new Date().toLocaleTimeString('ar-SA')}\n✅ الربط يعمل ومستقر على السيرفر.`;
+  const textToSend = message || `مرحباً ${recipientName}،\nرسالة فحص مباشر من نظام أتمتة ومتابعة لوكيت.\nالتوقيت: ${getRiyadhTimeString()}\n✅ الربط يعمل ومستقر على السيرفر.`;
   const sendRes = await sendWhatsAppDirect(cleanPhone, textToSend);
 
   res.json({
@@ -1608,6 +1633,10 @@ async function executeLocatCloudSync(): Promise<{ success: boolean; count: numbe
         isDelayed,
         alertSentToCourier: existing ? existing.alertSentToCourier : false,
         alertSentToAdmin: existing ? existing.alertSentToAdmin : false,
+        alertSentToAdmin2: existing ? existing.alertSentToAdmin2 : false,
+        courierAlertTime: existing?.courierAlertTime,
+        adminAlertTime: existing?.adminAlertTime,
+        admin2AlertTime: existing?.admin2AlertTime,
         activeOrdersHeldByCourier: 1,
         lastUpdated: new Date().toISOString(),
       };
