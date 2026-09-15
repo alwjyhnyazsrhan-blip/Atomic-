@@ -74,6 +74,51 @@ const STORE_FILE = path.resolve(process.cwd(), 'locat_database.json');
 let couriers: Courier[] = [];
 let orders: Order[] = [];
 let alerts: AlertLog[] = [];
+let customCourierPhones: Record<string, { phone: string; name?: string; updatedAt: string }> = {};
+let whatsappSessionBackup: Record<string, string> = {};
+
+function backupBaileysSession() {
+  try {
+    if (!fs.existsSync(AUTH_DIR)) return;
+    const files = fs.readdirSync(AUTH_DIR);
+    const backup: Record<string, string> = {};
+    for (const f of files) {
+      if (f.endsWith('.json')) {
+        const fullPath = path.join(AUTH_DIR, f);
+        try {
+          backup[f] = fs.readFileSync(fullPath, 'utf-8');
+        } catch (e) {}
+      }
+    }
+    if (backup['creds.json']) {
+      whatsappSessionBackup = backup;
+      saveStoreToDisk();
+      console.log('[Baileys Engine] 💾 تم حفظ نسخة احتياطية مشفرة لجلسة الواتساب في قاعدة البيانات الدائمة');
+    }
+  } catch (err: any) {
+    console.warn('[Baileys Backup Warning]', err?.message);
+  }
+}
+
+function restoreBaileysSessionFromBackup(): boolean {
+  try {
+    if (!whatsappSessionBackup || !whatsappSessionBackup['creds.json']) return false;
+    if (!fs.existsSync(AUTH_DIR)) {
+      fs.mkdirSync(AUTH_DIR, { recursive: true });
+    }
+    for (const [filename, content] of Object.entries(whatsappSessionBackup)) {
+      const fullPath = path.join(AUTH_DIR, filename);
+      if (!fs.existsSync(fullPath)) {
+        fs.writeFileSync(fullPath, content, 'utf-8');
+      }
+    }
+    console.log('[Baileys Engine] 🔄 تم استعادة ملفات جلسة الواتساب بنجاح من النسخة الاحتياطية الدائمة!');
+    return true;
+  } catch (err: any) {
+    console.warn('[Baileys Restore Warning]', err?.message);
+    return false;
+  }
+}
 
 function loadStoreFromDisk() {
   try {
@@ -85,6 +130,13 @@ function loadStoreFromDisk() {
       if (Array.isArray(data.alerts)) alerts = data.alerts;
       if (data.settings && typeof data.settings === 'object') {
         settings = { ...settings, ...data.settings };
+        if (settings.adminPhone === '966555123456') settings.adminPhone = '';
+      }
+      if (data.customCourierPhones && typeof data.customCourierPhones === 'object') {
+        customCourierPhones = data.customCourierPhones;
+      }
+      if (data.whatsappSessionBackup && typeof data.whatsappSessionBackup === 'object') {
+        whatsappSessionBackup = data.whatsappSessionBackup;
       }
       console.log(`[Store] ✅ تم تحميل البيانات من القرص: ${couriers.length} مندوب، ${orders.length} طلب.`);
     }
@@ -95,7 +147,7 @@ function loadStoreFromDisk() {
 
 function saveStoreToDisk() {
   try {
-    const data = { couriers, orders, alerts, settings };
+    const data = { couriers, orders, alerts, settings, customCourierPhones, whatsappSessionBackup };
     fs.writeFileSync(STORE_FILE, JSON.stringify(data, null, 2), 'utf-8');
   } catch (err) {
     console.error('[Store] فشل حفظ البيانات في القرص:', err);
@@ -156,6 +208,7 @@ async function connectToWhatsApp(forceNew: boolean = false) {
         sock.end(undefined);
         sock = null;
       }
+      whatsappSessionBackup = {};
       if (fs.existsSync(AUTH_DIR)) {
         fs.rmSync(AUTH_DIR, { recursive: true, force: true });
         console.log('[Baileys] تم مسح ملفات الجلسة القديمة بنجاح لبدء جلسة جديدة.');
@@ -168,6 +221,11 @@ async function connectToWhatsApp(forceNew: boolean = false) {
   try {
     if (!fs.existsSync(AUTH_DIR)) {
       fs.mkdirSync(AUTH_DIR, { recursive: true });
+    }
+
+    // Try to restore from persistent disk backup if empty
+    if (!fs.existsSync(path.join(AUTH_DIR, 'creds.json'))) {
+      restoreBaileysSessionFromBackup();
     }
 
     const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
@@ -185,9 +243,15 @@ async function connectToWhatsApp(forceNew: boolean = false) {
       browser: Browsers.ubuntu('Chrome'),
       connectTimeoutMs: 60000,
       defaultQueryTimeoutMs: 60000,
+      keepAliveIntervalMs: 25000,
+      markOnlineOnConnect: true,
+      syncFullHistory: false,
     });
 
-    sock.ev.on('creds.update', saveCreds);
+    sock.ev.on('creds.update', async () => {
+      await saveCreds();
+      backupBaileysSession();
+    });
 
     sock.ev.on('connection.update', async (update: any) => {
       const { connection, lastDisconnect, qr } = update;
@@ -231,35 +295,33 @@ async function connectToWhatsApp(forceNew: boolean = false) {
         console.log(`📱 رقم الحساب المرتبط: ${phone}`);
         console.log(`💾 تم حفظ الجلسة على السيرفر في: ${AUTH_DIR} (مستقرة ولا تتطلب إعادة مسح)`);
         console.log('═'.repeat(64) + '\n');
+
+        backupBaileysSession();
       }
 
       if (connection === 'close') {
         const statusCode = (lastDisconnect?.error as any)?.output?.statusCode;
-        const isLoggedOut = statusCode === DisconnectReason.loggedOut;
-        console.warn(`[Baileys WhatsApp] أُغلق الاتصال (رمز: ${statusCode}). هل هو تسجيل خروج؟ ${isLoggedOut}`);
+        console.warn(`[Baileys WhatsApp] أُغلق الاتصال مؤقتاً (رمز: ${statusCode}). جاري استعادة الاتصال مع الحفاظ على بيانات الجلسة...`);
 
-        if (isLoggedOut) {
-          whatsappState.status = 'logged_out';
-          whatsappState.isLoggedIn = false;
-          whatsappState.qrDataUrl = null;
-          whatsappState.qrRaw = null;
-          whatsappState.userPhone = undefined;
-          try {
-            fs.rmSync(AUTH_DIR, { recursive: true, force: true });
-          } catch (e) {}
-          reconnectTimer = setTimeout(() => connectToWhatsApp(true), 3000);
-        } else {
-          whatsappState.status = 'reconnecting';
-          whatsappState.lastError = (lastDisconnect?.error as any)?.message || 'انقطع الاتصال المؤقت، جاري إعادة المحاولة...';
-          reconnectTimer = setTimeout(() => connectToWhatsApp(false), 5000);
-        }
+        // CRITICAL FIX: NEVER destroy auth files on temporary disconnects!
+        // Maintain persistent credentials so the user doesn't get logged out
+        whatsappState.status = 'reconnecting';
+        whatsappState.lastError = (lastDisconnect?.error as any)?.message || 'انقطع الاتصال المؤقت، جاري إعادة المحاولة والحفاظ على الجلسة...';
+
+        if (reconnectTimer) clearTimeout(reconnectTimer);
+        reconnectTimer = setTimeout(() => {
+          connectToWhatsApp(false);
+        }, 5000);
       }
     });
   } catch (err: any) {
     console.error('[Baileys Connection Error]', err?.message);
     whatsappState.status = 'disconnected';
     whatsappState.lastError = err?.message || 'تعذر تشغيل محرك Baileys';
-    reconnectTimer = setTimeout(() => connectToWhatsApp(false), 8000);
+    if (reconnectTimer) clearTimeout(reconnectTimer);
+    reconnectTimer = setTimeout(() => {
+      connectToWhatsApp(false);
+    }, 8000);
   } finally {
     isInitializingBaileys = false;
   }
@@ -331,39 +393,116 @@ function normalizeArabic(text: string): string {
     .replace(/\s+/g, ' ');
 }
 
+// Strip leading number callsign/prefix (e.g., "9-وائل" -> "وائل", "12 - احمد" -> "احمد", "#5 خالد" -> "خالد")
+function stripDriverPrefix(name: string): string {
+  if (!name) return '';
+  return name.replace(/^#?\d+[\s\-_:]*/, '').trim();
+}
+
+// Normalize Saudi phone to digits e.g. 9665xxxxxxxx
+function normalizeSaudiPhone(phone: string): string {
+  if (!phone) return '';
+  let digits = String(phone).replace(/[^0-9]/g, '');
+  if (digits.startsWith('00966')) {
+    digits = digits.slice(2);
+  } else if (digits.startsWith('05')) {
+    digits = '966' + digits.slice(1);
+  } else if (digits.startsWith('5') && digits.length === 9) {
+    digits = '966' + digits;
+  }
+  return digits;
+}
+
+// Clean phone for WhatsApp links and JID (e.g. 966551234567)
+function formatPhoneForWhatsApp(phone: string): string {
+  return normalizeSaudiPhone(phone);
+}
+
+// Format phone with international '+' prefix (e.g. +966551234567)
+function formatPhoneWithPlus(phone: string): string {
+  const norm = normalizeSaudiPhone(phone);
+  return norm ? `+${norm}` : String(phone).trim();
+}
+
+// Smart driver name comparison (matches with or without prefixes)
+function matchDriverName(name1: string, name2: string): boolean {
+  if (!name1 || !name2) return false;
+  const n1 = normalizeArabic(name1);
+  const n2 = normalizeArabic(name2);
+  if (n1 === n2) return true;
+
+  const s1 = normalizeArabic(stripDriverPrefix(name1));
+  const s2 = normalizeArabic(stripDriverPrefix(name2));
+  if (s1 && s2 && s1 === s2) return true;
+  if (s1 && s2 && (s1.includes(s2) || s2.includes(s1))) return true;
+  return false;
+}
+
+// Apply and lock custom phone to courier
+function applyCustomPhoneToCourier(courier: Courier, phone: string, name?: string) {
+  const formatted = formatPhoneWithPlus(phone);
+  courier.phone = formatted;
+  courier.customPhone = formatted;
+  courier.isCustomPhone = true;
+  courier.updatedAt = new Date().toISOString();
+
+  const driverName = name || courier.name;
+  const stripped = stripDriverPrefix(driverName);
+  const normName = normalizeArabic(driverName);
+  const normStripped = normalizeArabic(stripped);
+
+  const entry = { phone: formatted, name: driverName, updatedAt: new Date().toISOString() };
+  customCourierPhones[courier.id] = entry;
+  if (normName) customCourierPhones[normName] = entry;
+  if (normStripped) customCourierPhones[normStripped] = entry;
+
+  courier.locatAccounts.forEach((acc) => {
+    const aNorm = normalizeArabic(acc);
+    const aStripped = normalizeArabic(stripDriverPrefix(acc));
+    if (aNorm) customCourierPhones[aNorm] = entry;
+    if (aStripped) customCourierPhones[aStripped] = entry;
+  });
+
+  // Immediately propagate this protected phone to all matching orders in the system
+  orders.forEach((o) => {
+    const match = findCourierForOrder(o.locatAccount, o.courierName, o.courierId, o.courierPhone);
+    if (match && match.id === courier.id) {
+      o.courierId = courier.id;
+      o.courierName = courier.name;
+      o.courierPhone = formatted;
+    }
+  });
+
+  saveStoreToDisk();
+}
+
 // Helper: Match courier by Locat account, courier name, courier ID, or phone
 function findCourierForOrder(account?: string, courierName?: string, courierId?: string, courierPhone?: string): Courier | undefined {
   if (courierId) {
     const foundById = couriers.find((c) => c.id === courierId);
     if (foundById) return foundById;
   }
+
   const cleanAccount = normalizeArabic(account || '');
   const cleanName = normalizeArabic(courierName || '');
-  const cleanPhone = (courierPhone || '').replace(/\D/g, '');
+  const cleanPhone = normalizeSaudiPhone(courierPhone || '');
 
   return couriers.find((c) => {
-    const cName = normalizeArabic(c.name);
-    const cPhone = c.phone.replace(/\D/g, '');
-
     // Phone match
+    const cPhone = normalizeSaudiPhone(c.phone);
     if (cleanPhone && cPhone && (cleanPhone === cPhone || cleanPhone.endsWith(cPhone) || cPhone.endsWith(cleanPhone))) {
       return true;
     }
 
+    // Name match with smart prefix stripping
+    if (cleanName && matchDriverName(c.name, cleanName)) return true;
+    if (cleanAccount && matchDriverName(c.name, cleanAccount)) return true;
+
     // Locat accounts list check
     const matchAccount = c.locatAccounts.some((acc) => {
-      const a = normalizeArabic(acc);
-      return a === cleanAccount || a === cleanName || (cleanAccount && (a.includes(cleanAccount) || cleanAccount.includes(a)));
+      return matchDriverName(acc, cleanAccount) || matchDriverName(acc, cleanName);
     });
     if (matchAccount) return true;
-
-    // Name match
-    if (cleanName && cName) {
-      if (cName === cleanName || cName.includes(cleanName) || cleanName.includes(cName)) return true;
-    }
-    if (cleanAccount && cName) {
-      if (cName === cleanAccount || cName.includes(cleanAccount) || cleanAccount.includes(cName)) return true;
-    }
 
     return false;
   });
@@ -372,11 +511,6 @@ function findCourierForOrder(account?: string, courierName?: string, courierId?:
 // Helper: Match courier by Locat account
 function findCourierByLocatAccount(account: string, courierName?: string): Courier | undefined {
   return findCourierForOrder(account, courierName);
-}
-
-// Helper: Clean phone number for WhatsApp links (digits only)
-function formatPhoneForWhatsApp(phone: string): string {
-  return phone.replace(/[^0-9]/g, '');
 }
 
 // Helper: Get Saudi Arabia (Asia/Riyadh - GMT+3) formatted time string
@@ -566,8 +700,16 @@ async function processMessageQueue() {
 function triggerAlertsForOrder(order: Order) {
   const courier = findCourierForOrder(order.locatAccount, order.courierName, order.courierId, order.courierPhone);
   const courierName = courier ? courier.name : (order.courierName || 'المندوب');
-  const courierPhone = courier ? courier.phone : (order.courierPhone || '');
+  const courierPhone = (courier?.isCustomPhone && courier?.phone) || courier?.phone || order.courierPhone || '';
   const activeCount = order.activeOrdersHeldByCourier || (courier ? courier.activeOrdersCount : 1);
+
+  if (courierPhone && !order.courierPhone) {
+    order.courierPhone = courierPhone;
+  }
+  if (courier) {
+    order.courierId = courier.id;
+    order.courierName = courier.name;
+  }
 
   // 1. Alert courier if delayed and not sent yet
   if (
@@ -660,8 +802,18 @@ function checkAndTriggerAutomatedAlerts() {
 
     const courier = findCourierForOrder(order.locatAccount, order.courierName, order.courierId, order.courierPhone);
     const courierName = courier ? courier.name : (order.courierName || 'المندوب');
-    const courierPhone = courier ? courier.phone : (order.courierPhone || '');
+    const courierPhone = (courier?.isCustomPhone && courier?.phone) || courier?.phone || order.courierPhone || '';
     const activeCount = order.activeOrdersHeldByCourier || (courier ? courier.activeOrdersCount : 1);
+
+    if (courierPhone && order.courierPhone !== courierPhone) {
+      order.courierPhone = courierPhone;
+      stateChanged = true;
+    }
+    if (courier && (!order.courierId || order.courierName !== courier.name)) {
+      order.courierId = courier.id;
+      order.courierName = courier.name;
+      stateChanged = true;
+    }
 
     // Rule 1: إذا تأخر الطلب: يرسل للمندوب فوراً
     if (
@@ -970,6 +1122,8 @@ app.post('/api/couriers', (req: Request, res: Response) => {
     ? locatAccounts.map((a: string) => a.trim()).filter(Boolean)
     : (typeof locatAccounts === 'string' ? locatAccounts.split(',').map((a) => a.trim()).filter(Boolean) : []);
 
+  const formattedPhone = formatPhoneWithPlus(phone);
+
   if (id) {
     // Update existing courier
     const index = couriers.findIndex((c) => c.id === id);
@@ -978,24 +1132,17 @@ app.post('/api/couriers', (req: Request, res: Response) => {
         ...couriers[index],
         name,
         locatAccounts: accountsArray.length > 0 ? accountsArray : couriers[index].locatAccounts,
-        phone,
+        phone: formattedPhone,
+        customPhone: formattedPhone,
+        isCustomPhone: true,
         notes: notes !== undefined ? notes : couriers[index].notes,
         status: status || couriers[index].status,
         updatedAt: new Date().toISOString(),
       };
 
-      // Also link any existing active orders belonging to this courier
-      orders.forEach((o) => {
-        const match = findCourierForOrder(o.locatAccount, o.courierName, o.courierId, o.courierPhone);
-        if (match && match.id === couriers[index].id) {
-          o.courierId = couriers[index].id;
-          o.courierName = couriers[index].name;
-          o.courierPhone = couriers[index].phone;
-        }
-      });
+      applyCustomPhoneToCourier(couriers[index], formattedPhone, name);
 
-      saveStoreToDisk();
-      res.json({ success: true, courier: couriers[index], message: 'تم تحديث بيانات المندوب بنجاح' });
+      res.json({ success: true, courier: couriers[index], message: 'تم تحديث بيانات المندوب وتثبيت الرقم بنجاح' });
       return;
     }
   }
@@ -1005,7 +1152,9 @@ app.post('/api/couriers', (req: Request, res: Response) => {
     id: `c-${Date.now()}`,
     name,
     locatAccounts: accountsArray.length > 0 ? accountsArray : [name],
-    phone,
+    phone: formattedPhone,
+    customPhone: formattedPhone,
+    isCustomPhone: true,
     status: status || 'active',
     activeOrdersCount: 0,
     totalDeliveredToday: 0,
@@ -1015,29 +1164,109 @@ app.post('/api/couriers', (req: Request, res: Response) => {
     updatedAt: new Date().toISOString(),
   };
 
-  // Immediately link any orders in the system matching this new courier
-  let linkedOrdersCount = 0;
-  orders.forEach((o) => {
-    const isMatch =
-      newCourier.locatAccounts.some((acc) => normalizeArabic(acc) === normalizeArabic(o.locatAccount || '')) ||
-      normalizeArabic(newCourier.name) === normalizeArabic(o.courierName || '') ||
-      normalizeArabic(newCourier.name) === normalizeArabic(o.locatAccount || '') ||
-      normalizeArabic(newCourier.name).includes(normalizeArabic(o.courierName || '')) ||
-      (o.courierName && normalizeArabic(o.courierName).includes(normalizeArabic(newCourier.name))) ||
-      (o.courierPhone && newCourier.phone.replace(/\D/g, '') === o.courierPhone.replace(/\D/g, ''));
-
-    if (isMatch) {
-      o.courierId = newCourier.id;
-      o.courierName = newCourier.name;
-      o.courierPhone = newCourier.phone;
-      linkedOrdersCount++;
-    }
-  });
-
-  newCourier.activeOrdersCount = linkedOrdersCount;
   couriers.push(newCourier);
+  applyCustomPhoneToCourier(newCourier, formattedPhone, name);
+
+  res.json({ success: true, courier: newCourier, message: 'تمت إضافة المندوب وتثبيت الرقم بنجاح' });
+});
+
+// Dedicated quick inline phone update & lock
+app.post('/api/couriers/update-phone', (req: Request, res: Response) => {
+  const { courierId, orderId, courierName, phone } = req.body;
+  if (!phone) {
+    res.status(400).json({ success: false, message: 'رقم الهاتف مطلوب' });
+    return;
+  }
+
+  const formattedPhone = formatPhoneWithPlus(phone);
+  let courier: Courier | undefined;
+
+  if (courierId) {
+    courier = couriers.find((c) => c.id === courierId);
+  }
+  if (!courier && orderId) {
+    const order = orders.find((o) => o.id === orderId);
+    if (order) {
+      courier = findCourierForOrder(order.locatAccount, order.courierName, order.courierId, order.courierPhone);
+    }
+  }
+  if (!courier && courierName) {
+    courier = couriers.find((c) => matchDriverName(c.name, courierName));
+  }
+
+  if (courier) {
+    applyCustomPhoneToCourier(courier, formattedPhone, courier.name);
+  } else {
+    // Create new courier with this custom phone
+    const newCourier: Courier = {
+      id: courierId || `c-${Date.now()}`,
+      name: courierName || 'مندوب لوكيت',
+      locatAccounts: [courierName].filter(Boolean) as string[],
+      phone: formattedPhone,
+      isCustomPhone: true,
+      customPhone: formattedPhone,
+      status: 'active',
+      activeOrdersCount: 0,
+      totalDeliveredToday: 0,
+      avgDeliveryTimeMinutes: 25,
+      delayedOrdersCount: 0,
+      updatedAt: new Date().toISOString(),
+    };
+    couriers.push(newCourier);
+    applyCustomPhoneToCourier(newCourier, formattedPhone, newCourier.name);
+    courier = newCourier;
+  }
+
+  // Update order directly if orderId provided
+  if (orderId) {
+    const o = orders.find((ord) => ord.id === orderId);
+    if (o) {
+      o.courierPhone = formattedPhone;
+      if (courier) {
+        o.courierId = courier.id;
+        o.courierName = courier.name;
+      }
+    }
+  }
+
   saveStoreToDisk();
-  res.json({ success: true, courier: newCourier, message: 'تمت إضافة المندوب بنجاح' });
+  console.log(`[Couriers] 🔒 تم تثبيت رقم المندوب (${courier.name}): ${formattedPhone} وحمايته من التغيير.`);
+
+  res.json({
+    success: true,
+    message: `تم تثبيت وتأمين رقم المندوب (${courier.name}) بنجاح: ${formattedPhone}`,
+    courier,
+    phone: formattedPhone,
+  });
+});
+
+// Restore custom phones from browser localStorage backup
+app.post('/api/couriers/restore-custom', (req: Request, res: Response) => {
+  const { customPhones } = req.body;
+  if (!customPhones || typeof customPhones !== 'object') {
+    res.json({ success: true, count: 0 });
+    return;
+  }
+
+  let restoredCount = 0;
+  for (const [key, data] of Object.entries(customPhones)) {
+    const phone = typeof data === 'string' ? data : (data as any)?.phone;
+    const name = typeof data === 'string' ? '' : (data as any)?.name;
+    if (!phone) continue;
+
+    const formatted = formatPhoneWithPlus(phone);
+    const courier = couriers.find((c) => c.id === key || matchDriverName(c.name, key) || (name && matchDriverName(c.name, name)));
+    if (courier) {
+      applyCustomPhoneToCourier(courier, formatted, courier.name);
+      restoredCount++;
+    } else {
+      customCourierPhones[key] = { phone: formatted, name: name || key, updatedAt: new Date().toISOString() };
+    }
+  }
+
+  saveStoreToDisk();
+  console.log(`[Couriers] 🔄 تم استعادة وتثبيت ${restoredCount} أرقام مناديب مخصصة من النسخة الاحتياطية.`);
+  res.json({ success: true, restoredCount });
 });
 
 app.delete('/api/couriers/:id', (req: Request, res: Response) => {
@@ -1642,26 +1871,37 @@ async function executeLocatCloudSync(): Promise<{ success: boolean; count: numbe
     allLocatDrivers.forEach((driver: any) => {
       const driverId = String(driver._id || driver.id || '');
       const driverName = String(driver.name || `${driver.firstName || ''} ${driver.lastName || ''}`).trim();
-      let rawPhone = String(driver.phone || driver.mobile || '').replace(/[^0-9]/g, '');
-      if (rawPhone.startsWith('05')) {
-        rawPhone = '966' + rawPhone.slice(1);
-      } else if (rawPhone.startsWith('5')) {
-        rawPhone = '966' + rawPhone;
-      }
+      const rawPhone = normalizeSaudiPhone(String(driver.phone || driver.mobile || ''));
       const formattedPhone = rawPhone ? `+${rawPhone}` : '';
 
       const existingIdx = couriers.findIndex(
         (c) => c.id === driverId || 
                c.locatAccounts.includes(driverId) || 
-               normalizeArabic(c.name) === normalizeArabic(driverName)
+               matchDriverName(c.name, driverName) ||
+               c.locatAccounts.some((acc) => matchDriverName(acc, driverName))
       );
+
+      // Check if this driver has a custom locked phone
+      const customEntry = (existingIdx !== -1 && customCourierPhones[couriers[existingIdx].id]) ||
+                          (driverId && customCourierPhones[driverId]) ||
+                          (driverName && customCourierPhones[normalizeArabic(driverName)]) ||
+                          (driverName && customCourierPhones[normalizeArabic(stripDriverPrefix(driverName))]);
 
       if (existingIdx !== -1) {
         const existing = couriers[existingIdx];
-        if (formattedPhone && (!existing.phone || existing.phone.length < 10)) {
+
+        // STRICT PROTECTION: If user manually edited phone, DO NOT overwrite it with Locat's phone!
+        if (existing.isCustomPhone || customEntry) {
+          if (customEntry && customEntry.phone) {
+            existing.phone = customEntry.phone;
+            existing.customPhone = customEntry.phone;
+          }
+          existing.isCustomPhone = true;
+        } else if (formattedPhone && (!existing.phone || existing.phone.length < 10)) {
           existing.phone = formattedPhone;
         }
-        if (!existing.locatAccounts.includes(driverId)) {
+
+        if (driverId && !existing.locatAccounts.includes(driverId)) {
           existing.locatAccounts.push(driverId);
         }
         if (driverName && !existing.locatAccounts.includes(driverName)) {
@@ -1676,6 +1916,7 @@ async function executeLocatCloudSync(): Promise<{ success: boolean; count: numbe
         existing.balance = typeof driver.balance === 'number' ? driver.balance : existing.balance;
         existing.updatedAt = new Date().toISOString();
       } else {
+        const finalPhone = customEntry?.phone || formattedPhone || '';
         couriers.push({
           id: driverId || `c-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
           name: driverName || 'مندوب لوكيت',
@@ -1686,7 +1927,9 @@ async function executeLocatCloudSync(): Promise<{ success: boolean; count: numbe
           gift: typeof driver.gift === 'number' ? driver.gift : 0,
           balance: typeof driver.balance === 'number' ? driver.balance : 0,
           locatAccounts: [driverName, driverId].filter(Boolean),
-          phone: formattedPhone || '',
+          phone: finalPhone,
+          customPhone: customEntry?.phone,
+          isCustomPhone: Boolean(customEntry),
           status: driver.isActive === false ? 'idle' : 'active',
           activeOrdersCount: 0,
           totalDeliveredToday: 0,
@@ -1772,21 +2015,22 @@ async function executeLocatCloudSync(): Promise<{ success: boolean; count: numbe
       const driverId = String(item.driver_id || item.driverId || '').trim();
       const driverName = String(item.driver_name || item.driverName || item.delegate || item.driver?.name || '').trim();
 
-      // Match courier with strict equality and account normalization
-      let matchedCourier = couriers.find((c) => c.id === driverId || c.locatAccounts.includes(driverId));
-      if (!matchedCourier && driverName) {
-        matchedCourier = couriers.find((c) => 
-          normalizeArabic(c.name) === normalizeArabic(driverName) ||
-          c.locatAccounts.some((acc) => normalizeArabic(acc) === normalizeArabic(driverName))
-        );
-      }
+      // Match courier with smart prefix stripping and custom phone registry
+      let matchedCourier = findCourierForOrder(driverId, driverName, driverId, item.driver_phone);
+
+      const customEntry = (matchedCourier && customCourierPhones[matchedCourier.id]) ||
+                          (driverId && customCourierPhones[driverId]) ||
+                          (driverName && (customCourierPhones[normalizeArabic(driverName)] || customCourierPhones[normalizeArabic(stripDriverPrefix(driverName))]));
 
       if (!matchedCourier && (driverId || driverName)) {
+        const initialPhone = customEntry?.phone || (item.driver_phone ? formatPhoneWithPlus(item.driver_phone) : '');
         matchedCourier = {
           id: driverId || `c-${Date.now()}`,
           name: driverName || 'مندوب لوكيت',
           locatAccounts: [driverName, driverId].filter(Boolean),
-          phone: item.driver_phone || '',
+          phone: initialPhone,
+          customPhone: customEntry?.phone,
+          isCustomPhone: Boolean(customEntry),
           status: 'active',
           activeOrdersCount: 0,
           totalDeliveredToday: 0,
@@ -1797,7 +2041,11 @@ async function executeLocatCloudSync(): Promise<{ success: boolean; count: numbe
         couriers.push(matchedCourier);
       }
 
-      const courierPhone = matchedCourier?.phone || item.driver_phone || '';
+      // STRICT PROTECTION: Always use customPhone if set
+      const courierPhone = (matchedCourier?.isCustomPhone && matchedCourier?.phone)
+        ? matchedCourier.phone
+        : (customEntry?.phone || matchedCourier?.phone || (item.driver_phone ? formatPhoneWithPlus(item.driver_phone) : ''));
+
       const courierDisplayName = matchedCourier?.name || driverName || 'مندوب لوكيت';
 
       // Timing calculations

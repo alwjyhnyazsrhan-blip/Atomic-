@@ -17,7 +17,12 @@ import {
   Plus,
   AlertTriangle,
   Info,
-  UserCheck
+  UserCheck,
+  Lock,
+  Edit2,
+  Check,
+  X,
+  Loader2
 } from 'lucide-react';
 import { Courier, Order } from '../types';
 
@@ -28,6 +33,7 @@ interface CouriersViewProps {
   onEditCourier: (courier: Courier) => void;
   onDeleteCourier: (id: string) => void;
   onAssignOrderToCourier?: (courier: Courier) => void;
+  onUpdateCourierPhone?: (identifier: { courierId?: string; orderId?: string; courierName?: string; phone: string }) => Promise<void>;
 }
 
 // Arabic normalization helper for accurate matching
@@ -43,19 +49,32 @@ function normalizeArabic(text: string): string {
     .replace(/\s+/g, ' ');
 }
 
+function stripDriverPrefix(name: string): string {
+  if (!name) return '';
+  return name.replace(/^#?\d+[\s\-_:]*/, '').trim();
+}
+
 function doesCourierMatchOrder(c: Courier, o: Order): boolean {
   if (o.courierId && o.courierId === c.id) return true;
   const cName = normalizeArabic(c.name);
+  const cStripped = normalizeArabic(stripDriverPrefix(c.name));
   const oName = normalizeArabic(o.courierName || '');
+  const oStripped = normalizeArabic(stripDriverPrefix(o.courierName || ''));
   const oAcc = normalizeArabic(o.locatAccount || '');
+  const oAccStripped = normalizeArabic(stripDriverPrefix(o.locatAccount || ''));
   const cPhone = c.phone.replace(/\D/g, '');
   const oPhone = (o.courierPhone || '').replace(/\D/g, '');
 
   if (cPhone && oPhone && (cPhone === oPhone || cPhone.endsWith(oPhone) || oPhone.endsWith(cPhone))) return true;
 
+  if (cStripped && (cStripped === oStripped || cStripped === oAccStripped || cStripped.includes(oStripped) || oStripped.includes(cStripped))) {
+    return true;
+  }
+
   if (c.locatAccounts.some((acc) => {
     const a = normalizeArabic(acc);
-    return a === oAcc || a === oName || (oAcc && (a.includes(oAcc) || oAcc.includes(a)));
+    const as = normalizeArabic(stripDriverPrefix(acc));
+    return a === oAcc || a === oName || as === oStripped || (oAcc && (a.includes(oAcc) || oAcc.includes(a)));
   })) return true;
 
   if (cName && (cName === oName || cName === oAcc || cName.includes(oName) || oName.includes(cName) || cName.includes(oAcc) || oAcc.includes(cName))) return true;
@@ -70,8 +89,46 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
   onEditCourier,
   onDeleteCourier,
   onAssignOrderToCourier,
+  onUpdateCourierPhone,
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
+  const [editingCourierId, setEditingCourierId] = useState<string | null>(null);
+  const [inputPhone, setInputPhone] = useState<string>('');
+  const [isSavingPhone, setIsSavingPhone] = useState<boolean>(false);
+
+  const handleStartEditPhone = (c: Courier) => {
+    setEditingCourierId(c.id);
+    setInputPhone(c.phone || '');
+  };
+
+  const handleSavePhone = async (c: Courier) => {
+    if (!inputPhone.trim()) return;
+    setIsSavingPhone(true);
+    try {
+      if (onUpdateCourierPhone) {
+        await onUpdateCourierPhone({
+          courierId: c.id,
+          courierName: c.name,
+          phone: inputPhone.trim(),
+        });
+      } else {
+        await fetch('/api/couriers/update-phone', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            courierId: c.id,
+            courierName: c.name,
+            phone: inputPhone.trim(),
+          }),
+        });
+      }
+      setEditingCourierId(null);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setIsSavingPhone(false);
+    }
+  };
 
   const filteredCouriers = couriers.filter((c) => {
     const q = searchTerm.toLowerCase();
@@ -252,18 +309,68 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
 
                   {/* Real WhatsApp Phone */}
                   <div className="flex items-center justify-between text-xs px-1">
-                    <span className="text-slate-500 font-medium">رقم الواتساب:</span>
-                    <a
-                      href={waUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="font-mono font-bold text-emerald-700 hover:text-emerald-800 flex items-center gap-1.5 transition"
-                      dir="ltr"
-                      title="فتح محادثة واتساب مع المندوب"
-                    >
-                      <MessageCircle className="w-3.5 h-3.5 text-emerald-600" />
-                      <span>{courier.phone || 'غير مسجل'}</span>
-                    </a>
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-slate-500 font-medium">رقم الواتساب:</span>
+                      {courier.isCustomPhone && (
+                        <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-200" title="رقم مخصص ومثبت - محمي تماماً من التغيير أو الاستبدال عند سحب لوكيت">
+                          <Lock className="w-2.5 h-2.5 text-indigo-600" />
+                          مثبت ومحمي
+                        </span>
+                      )}
+                    </div>
+
+                    {editingCourierId === courier.id ? (
+                      <div className="flex items-center gap-1">
+                        <input
+                          type="text"
+                          value={inputPhone}
+                          onChange={(e) => setInputPhone(e.target.value)}
+                          placeholder="+9665xxxxxxxx"
+                          className="w-28 px-1.5 py-1 text-[11px] font-mono border border-emerald-500 rounded bg-white focus:outline-none"
+                          autoFocus
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') handleSavePhone(courier);
+                            if (e.key === 'Escape') setEditingCourierId(null);
+                          }}
+                        />
+                        <button
+                          onClick={() => handleSavePhone(courier)}
+                          disabled={isSavingPhone}
+                          className="p-1 text-white bg-emerald-600 hover:bg-emerald-700 rounded transition"
+                          title="حفظ وتثبيت الرقم"
+                        >
+                          {isSavingPhone ? <Loader2 className="w-3 h-3 animate-spin" /> : <Check className="w-3 h-3" />}
+                        </button>
+                        <button
+                          onClick={() => setEditingCourierId(null)}
+                          className="p-1 text-slate-400 hover:text-slate-600 rounded transition"
+                          title="إلغاء"
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-1.5">
+                        <a
+                          href={waUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="font-mono font-bold text-emerald-700 hover:text-emerald-800 flex items-center gap-1 transition"
+                          dir="ltr"
+                          title="فتح محادثة واتساب مع المندوب"
+                        >
+                          <MessageCircle className="w-3.5 h-3.5 text-emerald-600" />
+                          <span>{courier.phone || 'غير مسجل'}</span>
+                        </a>
+                        <button
+                          onClick={() => handleStartEditPhone(courier)}
+                          className="p-1 text-slate-300 hover:text-blue-600 hover:bg-blue-50 rounded transition"
+                          title="تعديل وتثبيت رقم المندوب السريع"
+                        >
+                          <Edit2 className="w-3 h-3" />
+                        </button>
+                      </div>
+                    )}
                   </div>
 
                   {/* Locate Metadata (Iqama/ID, Balance/Gift) */}

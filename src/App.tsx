@@ -108,6 +108,23 @@ export default function App() {
   };
 
   useEffect(() => {
+    // Restore any custom courier phones previously configured from browser local storage
+    try {
+      const localCustom = localStorage.getItem('locat_custom_couriers');
+      if (localCustom) {
+        const parsed = JSON.parse(localCustom);
+        if (Object.keys(parsed).length > 0) {
+          fetch('/api/couriers/restore-custom', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ customPhones: parsed }),
+          }).catch(() => {});
+        }
+      }
+    } catch (e) {
+      console.error('Failed restoring custom courier phones from local storage:', e);
+    }
+
     fetchData();
     // Background polling every 20 seconds to sync live order changes from the script
     const interval = setInterval(() => {
@@ -198,6 +215,16 @@ export default function App() {
   // Save / Update Courier
   const handleSaveCourier = async (courierData: Partial<Courier>) => {
     try {
+      // Save custom phone to localStorage as a durable browser backup
+      if (courierData.phone) {
+        try {
+          const stored = JSON.parse(localStorage.getItem('locat_custom_couriers') || '{}');
+          if (courierData.id) stored[courierData.id] = { phone: courierData.phone, name: courierData.name };
+          if (courierData.name) stored[courierData.name] = { phone: courierData.phone, name: courierData.name };
+          localStorage.setItem('locat_custom_couriers', JSON.stringify(stored));
+        } catch (e) {}
+      }
+
       const res = await fetch('/api/couriers', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -210,6 +237,72 @@ export default function App() {
       }
     } catch (err) {
       console.error(err);
+    }
+  };
+
+  // Quick inline update & lock for courier phone
+  const handleUpdateCourierPhone = async (identifier: {
+    courierId?: string;
+    orderId?: string;
+    courierName?: string;
+    phone: string;
+  }) => {
+    try {
+      const newPhone = identifier.phone.trim();
+      // Optimistic local state update
+      setCouriers((prev) =>
+        prev.map((c) => {
+          if (
+            (identifier.courierId && c.id === identifier.courierId) ||
+            (identifier.courierName && c.name === identifier.courierName)
+          ) {
+            return { ...c, phone: newPhone, customPhone: newPhone, isCustomPhone: true };
+          }
+          return c;
+        })
+      );
+      if (identifier.orderId) {
+        setOrders((prev) =>
+          prev.map((o) => {
+            if (o.id === identifier.orderId) {
+              return { ...o, courierPhone: newPhone };
+            }
+            return o;
+          })
+        );
+      }
+
+      // Persist in localStorage
+      try {
+        const stored = JSON.parse(localStorage.getItem('locat_custom_couriers') || '{}');
+        const key = identifier.courierId || identifier.courierName || identifier.orderId || 'driver';
+        stored[key] = {
+          courierId: identifier.courierId,
+          courierName: identifier.courierName,
+          phone: newPhone,
+          timestamp: Date.now(),
+        };
+        if (identifier.courierName) {
+          stored[identifier.courierName] = { phone: newPhone };
+        }
+        localStorage.setItem('locat_custom_couriers', JSON.stringify(stored));
+      } catch (e) {}
+
+      const res = await fetch('/api/couriers/update-phone', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(identifier),
+      });
+      const data = await res.json();
+      if (data.success) {
+        showToast(data.message, 'success');
+        fetchData(true);
+      } else {
+        showToast(data.message || 'حدث خطأ في حفظ الرقم', 'alert');
+      }
+    } catch (err) {
+      console.error(err);
+      showToast('تعذر الاتصال بالخادم لحفظ رقم المندوب', 'alert');
     }
   };
 
@@ -334,6 +427,7 @@ export default function App() {
             cloudSyncState={cloudSyncState}
             onTriggerCloudSync={handleTriggerCloudSync}
             onOpenSettings={() => setIsSettingsOpen(true)}
+            onUpdateCourierPhone={handleUpdateCourierPhone}
           />
         )}
 
@@ -354,6 +448,7 @@ export default function App() {
               setSelectedCourierForOrder(c);
               setIsAddOrderOpen(true);
             }}
+            onUpdateCourierPhone={handleUpdateCourierPhone}
           />
         )}
 

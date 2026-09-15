@@ -1,3 +1,5 @@
+
+
 export interface Courier {
   id: string;
   name: string;
@@ -5,6 +7,8 @@ export interface Courier {
   lastName?: string;
   locatAccounts: string[]; // List of Locat IDs/usernames (allows moving between accounts)
   phone: string; // Real WhatsApp phone number (with country code, e.g. +966...)
+  isCustomPhone?: boolean; // Protected flag: manually set or edited phone that must NEVER be overwritten by sync
+  customPhone?: string;
   idNumber?: string; // National ID / Iqama number from Locate
   cityId?: string;
   gift?: number; // Rewards/points balance in Locate

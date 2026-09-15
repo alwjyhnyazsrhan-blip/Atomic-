@@ -43,6 +43,7 @@ interface LiveOrdersViewProps {
   cloudSyncState?: CloudSyncState | null;
   onTriggerCloudSync?: () => void;
   onOpenSettings?: () => void;
+  onUpdateCourierPhone?: (identifier: { courierId?: string; orderId?: string; courierName?: string; phone: string }) => Promise<void>;
 }
 
 function normalizeArabic(text: string): string {
@@ -57,25 +58,39 @@ function normalizeArabic(text: string): string {
     .replace(/\s+/g, ' ');
 }
 
+function stripDriverPrefix(name: string): string {
+  if (!name) return '';
+  return name.replace(/^#?\d+[\s\-_:]*/, '').trim();
+}
+
 function findMatchingCourier(couriers: Courier[], order: Order): Courier | undefined {
   if (order.courierId) {
     const byId = couriers.find((c) => c.id === order.courierId);
     if (byId) return byId;
   }
   const oName = normalizeArabic(order.courierName || '');
+  const oStripped = normalizeArabic(stripDriverPrefix(order.courierName || ''));
   const oAcc = normalizeArabic(order.locatAccount || '');
+  const oAccStripped = normalizeArabic(stripDriverPrefix(order.locatAccount || ''));
   const oPhone = (order.courierPhone || '').replace(/\D/g, '');
 
   return couriers.find((c) => {
     const cName = normalizeArabic(c.name);
+    const cStripped = normalizeArabic(stripDriverPrefix(c.name));
     const cPhone = c.phone.replace(/\D/g, '');
 
     if (oPhone && cPhone && (oPhone === cPhone || oPhone.endsWith(cPhone) || cPhone.endsWith(oPhone))) {
       return true;
     }
+
+    if (cStripped && (cStripped === oStripped || cStripped === oAccStripped || cStripped.includes(oStripped) || oStripped.includes(cStripped))) {
+      return true;
+    }
+
     if (c.locatAccounts.some((acc) => {
       const a = normalizeArabic(acc);
-      return a === oAcc || a === oName || (oAcc && (a.includes(oAcc) || oAcc.includes(a)));
+      const as = normalizeArabic(stripDriverPrefix(acc));
+      return a === oAcc || a === oName || as === oStripped || (oAcc && (a.includes(oAcc) || oAcc.includes(a)));
     })) {
       return true;
     }
@@ -96,6 +111,7 @@ export const LiveOrdersView: React.FC<LiveOrdersViewProps> = ({
   cloudSyncState,
   onTriggerCloudSync,
   onOpenSettings,
+  onUpdateCourierPhone,
 }) => {
   const [filter, setFilter] = useState<'all' | 'active' | 'delayed' | 'delivered'>('all');
   const [searchQuery, setSearchQuery] = useState('');
@@ -423,6 +439,7 @@ export const LiveOrdersView: React.FC<LiveOrdersViewProps> = ({
           couriers={couriers}
           settings={settings}
           onTriggerManualAlert={onTriggerManualAlert}
+          onUpdateCourierPhone={onUpdateCourierPhone}
         />
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">

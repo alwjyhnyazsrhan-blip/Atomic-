@@ -14,7 +14,12 @@ import {
   ExternalLink,
   Store,
   CreditCard,
-  Banknote
+  Banknote,
+  Edit2,
+  Check,
+  X,
+  Lock,
+  Loader2
 } from 'lucide-react';
 import { Order, Courier, SystemSettings } from '../types';
 
@@ -23,6 +28,7 @@ interface LocateOrdersTableProps {
   couriers: Courier[];
   settings: SystemSettings;
   onTriggerManualAlert: (orderId: string, target: 'courier' | 'admin' | 'admin2' | 'both') => void;
+  onUpdateCourierPhone?: (identifier: { courierId?: string; orderId?: string; courierName?: string; phone: string }) => Promise<void>;
 }
 
 function normalizeArabic(text: string): string {
@@ -37,25 +43,39 @@ function normalizeArabic(text: string): string {
     .replace(/\s+/g, ' ');
 }
 
+function stripDriverPrefix(name: string): string {
+  if (!name) return '';
+  return name.replace(/^#?\d+[\s\-_:]*/, '').trim();
+}
+
 function findMatchingCourier(couriers: Courier[], order: Order): Courier | undefined {
   if (order.courierId) {
     const byId = couriers.find((c) => c.id === order.courierId);
     if (byId) return byId;
   }
   const oName = normalizeArabic(order.courierName || '');
+  const oStripped = normalizeArabic(stripDriverPrefix(order.courierName || ''));
   const oAcc = normalizeArabic(order.locatAccount || '');
+  const oAccStripped = normalizeArabic(stripDriverPrefix(order.locatAccount || ''));
   const oPhone = (order.courierPhone || '').replace(/\D/g, '');
 
   return couriers.find((c) => {
     const cName = normalizeArabic(c.name);
+    const cStripped = normalizeArabic(stripDriverPrefix(c.name));
     const cPhone = c.phone.replace(/\D/g, '');
 
     if (oPhone && cPhone && (oPhone === cPhone || oPhone.endsWith(cPhone) || cPhone.endsWith(oPhone))) {
       return true;
     }
+
+    if (cStripped && (cStripped === oStripped || cStripped === oAccStripped || cStripped.includes(oStripped) || oStripped.includes(cStripped))) {
+      return true;
+    }
+
     if (c.locatAccounts.some((acc) => {
       const a = normalizeArabic(acc);
-      return a === oAcc || a === oName || (oAcc && (a.includes(oAcc) || oAcc.includes(a)));
+      const as = normalizeArabic(stripDriverPrefix(acc));
+      return a === oAcc || a === oName || as === oStripped || (oAcc && (a.includes(oAcc) || oAcc.includes(a)));
     })) {
       return true;
     }
@@ -84,10 +104,50 @@ export const LocateOrdersTable: React.FC<LocateOrdersTableProps> = ({
   couriers,
   settings,
   onTriggerManualAlert,
+  onUpdateCourierPhone,
 }) => {
   const [pageSize, setPageSize] = useState<number>(25);
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [editingOrderId, setEditingOrderId] = useState<string | null>(null);
+  const [inputPhone, setInputPhone] = useState<string>('');
+  const [isSavingPhone, setIsSavingPhone] = useState<boolean>(false);
+
+  const handleStartEditPhone = (order: Order, currentPhone: string) => {
+    setEditingOrderId(order.id);
+    setInputPhone(currentPhone || '');
+  };
+
+  const handleSavePhone = async (order: Order, courier?: Courier) => {
+    if (!inputPhone.trim()) return;
+    setIsSavingPhone(true);
+    try {
+      if (onUpdateCourierPhone) {
+        await onUpdateCourierPhone({
+          courierId: courier?.id,
+          orderId: order.id,
+          courierName: order.courierName,
+          phone: inputPhone.trim(),
+        });
+      } else {
+        await fetch('/api/couriers/update-phone', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            courierId: courier?.id,
+            orderId: order.id,
+            courierName: order.courierName,
+            phone: inputPhone.trim(),
+          }),
+        });
+      }
+      setEditingOrderId(null);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setIsSavingPhone(false);
+    }
+  };
 
   const totalOrders = orders.length;
   const totalPages = pageSize === 0 ? 1 : Math.ceil(totalOrders / pageSize) || 1;
@@ -274,21 +334,67 @@ export const LocateOrdersTable: React.FC<LocateOrdersTableProps> = ({
                     </div>
                   </td>
 
-                  {/* Courier Phone */}
-                  <td className="py-3 px-3 whitespace-nowrap font-mono text-xs text-slate-700" dir="ltr">
-                    {courierPhone ? (
-                      <a
-                        href={courierWaUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-emerald-700 hover:text-emerald-800 font-bold hover:underline inline-flex items-center gap-1"
-                        title="محادثة واتساب"
-                      >
-                        <span>{courierPhone}</span>
-                        <MessageCircle className="w-3 h-3 text-emerald-600" />
-                      </a>
+                  {/* Courier Phone with Lock & Quick Edit */}
+                  <td className="py-2.5 px-3 whitespace-nowrap font-mono text-xs text-slate-700" dir="ltr">
+                    {editingOrderId === order.id ? (
+                      <div className="flex items-center gap-1">
+                        <input
+                          type="text"
+                          value={inputPhone}
+                          onChange={(e) => setInputPhone(e.target.value)}
+                          placeholder="+9665xxxxxxxx"
+                          className="w-28 px-1.5 py-1 text-[11px] font-mono border border-emerald-500 rounded bg-white focus:outline-none"
+                          autoFocus
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') handleSavePhone(order, courier);
+                            if (e.key === 'Escape') setEditingOrderId(null);
+                          }}
+                        />
+                        <button
+                          onClick={() => handleSavePhone(order, courier)}
+                          disabled={isSavingPhone}
+                          className="p-1 text-white bg-emerald-600 hover:bg-emerald-700 rounded transition"
+                          title="حفظ وتثبيت الرقم ومراقبته"
+                        >
+                          {isSavingPhone ? <Loader2 className="w-3 h-3 animate-spin" /> : <Check className="w-3 h-3" />}
+                        </button>
+                        <button
+                          onClick={() => setEditingOrderId(null)}
+                          className="p-1 text-slate-400 hover:text-slate-600 rounded transition"
+                          title="إلغاء"
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      </div>
                     ) : (
-                      <span className="text-slate-400">-</span>
+                      <div className="flex items-center gap-1.5 justify-start">
+                        {courierPhone ? (
+                          <a
+                            href={courierWaUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-emerald-700 hover:text-emerald-800 font-bold hover:underline inline-flex items-center gap-1"
+                            title="محادثة واتساب"
+                          >
+                            <span>{courierPhone}</span>
+                            <MessageCircle className="w-3 h-3 text-emerald-600" />
+                          </a>
+                        ) : (
+                          <span className="text-slate-400 text-[11px] font-sans">غير مسجل</span>
+                        )}
+                        {courier?.isCustomPhone && (
+                          <span className="inline-flex items-center text-indigo-600" title="رقم مخصص ومثبت - محمي من استبدال لوكيت التلقائي">
+                            <Lock className="w-2.5 h-2.5" />
+                          </span>
+                        )}
+                        <button
+                          onClick={() => handleStartEditPhone(order, courierPhone)}
+                          className="p-1 text-slate-300 hover:text-blue-600 hover:bg-blue-50 rounded transition"
+                          title="تعديل وتثبيت رقم المندوب لمنع تغييره"
+                        >
+                          <Edit2 className="w-2.5 h-2.5" />
+                        </button>
+                      </div>
                     )}
                   </td>
 
