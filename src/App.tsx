@@ -80,7 +80,42 @@ export default function App() {
       if (couriersRes?.success) setCouriers(couriersRes.couriers);
       if (ordersRes?.success) setOrders(ordersRes.orders);
       if (alertsRes?.success) setAlerts(alertsRes.alerts);
-      if (waRes?.success && waRes.whatsappState) setWhatsappState(waRes.whatsappState);
+      if (waRes?.success && waRes.whatsappState) {
+        setWhatsappState(waRes.whatsappState);
+
+        // Fail-safe persistence: If server has active session backup, save to browser localStorage
+        if (waRes.sessionBackup && waRes.sessionBackup['creds.json']) {
+          try {
+            localStorage.setItem('baileys_session_backup', JSON.stringify(waRes.sessionBackup));
+          } catch (e) {}
+        }
+
+        // If server lost session on restart (e.g. Render container rebuild) but browser has backup, auto-restore!
+        if (!waRes.hasSavedSession && waRes.whatsappState.status !== 'connected') {
+          try {
+            const localBackup = localStorage.getItem('baileys_session_backup');
+            if (localBackup) {
+              const parsed = JSON.parse(localBackup);
+              if (parsed && parsed['creds.json']) {
+                console.log('[WhatsApp Auto-Restore] 🔄 استعادة تلقائية لجلسة الواتساب من ذاكرة المتصفح...');
+                fetch('/api/whatsapp/restore-session', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ sessionBackup: parsed }),
+                })
+                  .then((r) => r.json())
+                  .then((data) => {
+                    if (data.success) {
+                      showToast('تمت استعادة جلسة الواتساب المحفوظة تلقائياً إلى السيرفر بدون إعادة مسح الرمز', 'success');
+                      fetchData(true);
+                    }
+                  })
+                  .catch(() => {});
+              }
+            }
+          } catch (e) {}
+        }
+      }
       if (cloudRes?.success && cloudRes.cloudSyncState) setCloudSyncState(cloudRes.cloudSyncState);
     } catch (err) {
       console.error('Failed to sync system data:', err);
@@ -124,6 +159,21 @@ export default function App() {
     } catch (e) {
       console.error('Failed restoring custom courier phones from local storage:', e);
     }
+
+    // Attempt early restore of WhatsApp session if available in localStorage
+    try {
+      const localSession = localStorage.getItem('baileys_session_backup');
+      if (localSession) {
+        const parsedSession = JSON.parse(localSession);
+        if (parsedSession && parsedSession['creds.json']) {
+          fetch('/api/whatsapp/restore-session', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ sessionBackup: parsedSession }),
+          }).catch(() => {});
+        }
+      }
+    } catch (e) {}
 
     fetchData();
     // Background polling every 20 seconds to sync live order changes from the script

@@ -68,8 +68,43 @@ let cloudSyncState: CloudSyncState = {
   hasToken: false,
 };
 
-// --- FILE PERSISTENCE (Saves couriers, orders, settings across restarts) ---
-const STORE_FILE = path.resolve(process.cwd(), 'locat_database.json');
+// --- PERSISTENT STORAGE RESOLUTION (Render Disk, VPS, or Local) ---
+function getPersistentDirectory(): string {
+  if (process.env.BAILEYS_AUTH_DIR) {
+    const parent = path.dirname(path.resolve(process.env.BAILEYS_AUTH_DIR));
+    if (fs.existsSync(parent)) return parent;
+  }
+  if (process.env.PERSISTENT_DATA_DIR && fs.existsSync(process.env.PERSISTENT_DATA_DIR)) {
+    return path.resolve(process.env.PERSISTENT_DATA_DIR);
+  }
+  if (process.env.RENDER_DISK_PATH && fs.existsSync(process.env.RENDER_DISK_PATH)) {
+    return path.resolve(process.env.RENDER_DISK_PATH);
+  }
+  if (process.env.DATA_DIR && fs.existsSync(process.env.DATA_DIR)) {
+    return path.resolve(process.env.DATA_DIR);
+  }
+  // Check standard Render persistent disk mount /data
+  try {
+    if (fs.existsSync('/data')) {
+      fs.accessSync('/data', fs.constants.W_OK);
+      console.log('[Storage Engine] 💾 تم رصد واستخدام القرص السحابي الدائم المثبت على Render: /data');
+      return '/data';
+    }
+  } catch (e) {}
+  try {
+    if (fs.existsSync('/var/data')) {
+      fs.accessSync('/var/data', fs.constants.W_OK);
+      console.log('[Storage Engine] 💾 تم رصد واستخدام القرص السحابي الدائم: /var/data');
+      return '/var/data';
+    }
+  } catch (e) {}
+  return process.cwd();
+}
+
+const PERSISTENT_DIR = getPersistentDirectory();
+const STORE_FILE = path.resolve(PERSISTENT_DIR, 'locat_database.json');
+const SESSION_BACKUP_FILE = path.resolve(PERSISTENT_DIR, 'baileys_session_backup.json');
+const AUTH_DIR = process.env.BAILEYS_AUTH_DIR || path.resolve(PERSISTENT_DIR, 'baileys_auth_info');
 
 let couriers: Courier[] = [];
 let orders: Order[] = [];
@@ -92,27 +127,56 @@ function backupBaileysSession() {
     }
     if (backup['creds.json']) {
       whatsappSessionBackup = backup;
+      // Write to dedicated session backup file on disk
+      try {
+        fs.writeFileSync(SESSION_BACKUP_FILE, JSON.stringify(backup, null, 2), 'utf-8');
+      } catch (err: any) {
+        console.warn('[Baileys Standalone Backup Warning]', err?.message);
+      }
       saveStoreToDisk();
-      console.log('[Baileys Engine] 💾 تم حفظ نسخة احتياطية مشفرة لجلسة الواتساب في قاعدة البيانات الدائمة');
+      console.log(`[Baileys Engine] 💾 تم حفظ نسخة احتياطية مشفرة لجلسة الواتساب (${Object.keys(backup).length} ملف) في القرص الدائم`);
     }
   } catch (err: any) {
     console.warn('[Baileys Backup Warning]', err?.message);
   }
 }
 
-function restoreBaileysSessionFromBackup(): boolean {
+function restoreBaileysSessionFromBackup(externalPayload?: Record<string, string>): boolean {
   try {
-    if (!whatsappSessionBackup || !whatsappSessionBackup['creds.json']) return false;
+    let source = externalPayload;
+    if (!source || !source['creds.json']) {
+      if (whatsappSessionBackup && whatsappSessionBackup['creds.json']) {
+        source = whatsappSessionBackup;
+      } else if (fs.existsSync(SESSION_BACKUP_FILE)) {
+        try {
+          const raw = fs.readFileSync(SESSION_BACKUP_FILE, 'utf-8');
+          source = JSON.parse(raw);
+        } catch (e) {}
+      }
+    }
+
+    if (!source || !source['creds.json']) return false;
+
     if (!fs.existsSync(AUTH_DIR)) {
       fs.mkdirSync(AUTH_DIR, { recursive: true });
     }
-    for (const [filename, content] of Object.entries(whatsappSessionBackup)) {
-      const fullPath = path.join(AUTH_DIR, filename);
-      if (!fs.existsSync(fullPath)) {
+
+    let restoredCount = 0;
+    for (const [filename, content] of Object.entries(source)) {
+      if (typeof content === 'string' && filename.endsWith('.json')) {
+        const fullPath = path.join(AUTH_DIR, filename);
         fs.writeFileSync(fullPath, content, 'utf-8');
+        restoredCount++;
       }
     }
-    console.log('[Baileys Engine] 🔄 تم استعادة ملفات جلسة الواتساب بنجاح من النسخة الاحتياطية الدائمة!');
+
+    whatsappSessionBackup = source;
+    try {
+      fs.writeFileSync(SESSION_BACKUP_FILE, JSON.stringify(source, null, 2), 'utf-8');
+    } catch (e) {}
+    saveStoreToDisk();
+
+    console.log(`[Baileys Engine] 🔄 تم استعادة ملفات جلسة الواتساب بنجاح (${restoredCount} ملف) إلى ${AUTH_DIR}`);
     return true;
   } catch (err: any) {
     console.warn('[Baileys Restore Warning]', err?.message);
@@ -140,6 +204,18 @@ function loadStoreFromDisk() {
       }
       console.log(`[Store] ✅ تم تحميل البيانات من القرص: ${couriers.length} مندوب، ${orders.length} طلب.`);
     }
+
+    // Also check standalone session backup file if not present in main db
+    if ((!whatsappSessionBackup || !whatsappSessionBackup['creds.json']) && fs.existsSync(SESSION_BACKUP_FILE)) {
+      try {
+        const raw = fs.readFileSync(SESSION_BACKUP_FILE, 'utf-8');
+        const parsed = JSON.parse(raw);
+        if (parsed && parsed['creds.json']) {
+          whatsappSessionBackup = parsed;
+          console.log('[Store] ✅ تم تحميل نسخة جلسة الواتساب من ملف النسخ الاحتياطي المستقل');
+        }
+      } catch (e) {}
+    }
   } catch (err) {
     console.error('[Store] فشل قراءة ملف التخزين المحلي:', err);
   }
@@ -158,7 +234,6 @@ function saveStoreToDisk() {
 loadStoreFromDisk();
 
 // --- BAILEYS WHATSAPP ENGINE & PERSISTENT SESSION ---
-const AUTH_DIR = process.env.BAILEYS_AUTH_DIR || path.resolve(process.cwd(), 'baileys_auth_info');
 let sock: any = null;
 let isInitializingBaileys = false;
 let reconnectTimer: NodeJS.Timeout | null = null;
@@ -202,13 +277,27 @@ async function connectToWhatsApp(forceNew: boolean = false) {
     reconnectTimer = null;
   }
 
+  // 1. ALWAYS cleanly tear down previous socket to prevent ghost sockets fighting over session keys
+  if (sock) {
+    try {
+      console.log('[Baileys Engine] 🧹 تنظيف مقبس الاتصال السابق لمنع تضارب الاتصالات المتعددة...');
+      sock.ev?.removeAllListeners('connection.update');
+      sock.ev?.removeAllListeners('creds.update');
+      sock.ev?.removeAllListeners('messages.upsert');
+      sock.end?.(undefined);
+    } catch (cleanErr: any) {
+      console.warn('[Baileys Cleanup Warning]', cleanErr?.message);
+    }
+    sock = null;
+  }
+
+  // 2. If forced fresh session requested, clear auth dir and backup
   if (forceNew) {
     try {
-      if (sock) {
-        sock.end(undefined);
-        sock = null;
-      }
       whatsappSessionBackup = {};
+      if (fs.existsSync(SESSION_BACKUP_FILE)) {
+        fs.unlinkSync(SESSION_BACKUP_FILE);
+      }
       if (fs.existsSync(AUTH_DIR)) {
         fs.rmSync(AUTH_DIR, { recursive: true, force: true });
         console.log('[Baileys] تم مسح ملفات الجلسة القديمة بنجاح لبدء جلسة جديدة.');
@@ -240,17 +329,25 @@ async function connectToWhatsApp(forceNew: boolean = false) {
       auth: state,
       logger: pino({ level: 'silent' }),
       printQRInTerminal: false,
-      browser: Browsers.ubuntu('Chrome'),
+      browser: Browsers.macOS('Desktop'),
       connectTimeoutMs: 60000,
       defaultQueryTimeoutMs: 60000,
-      keepAliveIntervalMs: 25000,
+      keepAliveIntervalMs: 15000, // 15s keepAlive prevents proxies from killing idle TCP connections
       markOnlineOnConnect: true,
       syncFullHistory: false,
+      generateHighQualityLinkPreview: false,
+      getMessage: async (_key: any) => ({ conversation: '' }),
+      retryRequestDelayMs: 250,
+      maxMsgRetryCount: 5,
     });
 
     sock.ev.on('creds.update', async () => {
-      await saveCreds();
-      backupBaileysSession();
+      try {
+        await saveCreds();
+        backupBaileysSession();
+      } catch (saveErr: any) {
+        console.warn('[Baileys Creds Update Warning]', saveErr?.message);
+      }
     });
 
     sock.ev.on('connection.update', async (update: any) => {
@@ -301,17 +398,56 @@ async function connectToWhatsApp(forceNew: boolean = false) {
 
       if (connection === 'close') {
         const statusCode = (lastDisconnect?.error as any)?.output?.statusCode;
-        console.warn(`[Baileys WhatsApp] أُغلق الاتصال مؤقتاً (رمز: ${statusCode}). جاري استعادة الاتصال مع الحفاظ على بيانات الجلسة...`);
+        const errorReason = (lastDisconnect?.error as any)?.message || 'انقطاع اتصال مؤقت';
+        console.warn(`[Baileys WhatsApp] ⚠️ أُغلق الاتصال (رمز: ${statusCode}, السبب: ${errorReason})`);
 
-        // CRITICAL FIX: NEVER destroy auth files on temporary disconnects!
-        // Maintain persistent credentials so the user doesn't get logged out
+        // Check if true logout from phone device settings
+        const isLoggedOut = statusCode === DisconnectReason.loggedOut;
+
+        if (isLoggedOut) {
+          console.error('[Baileys WhatsApp] 🛑 تم تسجيل الخروج الفعلي من الهاتف (401 Logged Out)');
+          whatsappState.status = 'disconnected';
+          whatsappState.isLoggedIn = false;
+          whatsappState.userPhone = undefined;
+          whatsappState.userName = undefined;
+          whatsappState.lastError = 'تم تسجيل الخروج من الهاتف، يرجى مسح رمز QR جديد للربط';
+          try {
+            if (fs.existsSync(AUTH_DIR)) {
+              fs.rmSync(AUTH_DIR, { recursive: true, force: true });
+            }
+            if (fs.existsSync(SESSION_BACKUP_FILE)) {
+              fs.unlinkSync(SESSION_BACKUP_FILE);
+            }
+            whatsappSessionBackup = {};
+            saveStoreToDisk();
+          } catch (e) {}
+
+          if (reconnectTimer) clearTimeout(reconnectTimer);
+          reconnectTimer = setTimeout(() => {
+            connectToWhatsApp(false);
+          }, 2000);
+          return;
+        }
+
+        // Transient disconnect (515 restartRequired, 428 connectionClosed, 408 timedOut, network lag)
+        // NEVER destroy auth credentials!
         whatsappState.status = 'reconnecting';
-        whatsappState.lastError = (lastDisconnect?.error as any)?.message || 'انقطع الاتصال المؤقت، جاري إعادة المحاولة والحفاظ على الجلسة...';
+        whatsappState.lastError = `انقطع الاتصال المؤقت (رمز: ${statusCode || 'شبكة'}). جاري استعادة الاتصال التلقائي...`;
 
+        let delayMs = 3000;
+        if (statusCode === DisconnectReason.restartRequired || statusCode === 515) {
+          delayMs = 1200; // Immediate reconnect required by WhatsApp protocol
+        } else if (statusCode === DisconnectReason.connectionClosed || statusCode === 428) {
+          delayMs = 2000;
+        } else if (statusCode === DisconnectReason.timedOut || statusCode === 408) {
+          delayMs = 3000;
+        }
+
+        console.log(`[Baileys WhatsApp] 🔄 استعادة الاتصال التلقائي والحفاظ على الجلسة خلال ${delayMs / 1000} ثانية...`);
         if (reconnectTimer) clearTimeout(reconnectTimer);
         reconnectTimer = setTimeout(() => {
           connectToWhatsApp(false);
-        }, 5000);
+        }, delayMs);
       }
     });
   } catch (err: any) {
@@ -321,10 +457,70 @@ async function connectToWhatsApp(forceNew: boolean = false) {
     if (reconnectTimer) clearTimeout(reconnectTimer);
     reconnectTimer = setTimeout(() => {
       connectToWhatsApp(false);
-    }, 8000);
+    }, 6000);
   } finally {
     isInitializingBaileys = false;
   }
+}
+
+// 24/7 Baileys Watchdog / Health-check heartbeat (runs every 30 seconds)
+let baileysHeartbeatInterval: NodeJS.Timeout | null = null;
+function setupBaileysHeartbeat() {
+  if (baileysHeartbeatInterval) {
+    clearInterval(baileysHeartbeatInterval);
+  }
+  baileysHeartbeatInterval = setInterval(() => {
+    const hasCreds = fs.existsSync(path.join(AUTH_DIR, 'creds.json')) || (whatsappSessionBackup && !!whatsappSessionBackup['creds.json']);
+    if (!hasCreds) return;
+
+    if (whatsappState.isLoggedIn && sock) {
+      const wsReadyState = sock.ws?.readyState;
+      // readyState 1 = OPEN. If socket is closing (2) or closed (3) but Baileys didn't fire close event
+      if (wsReadyState !== undefined && wsReadyState !== 1 && !isInitializingBaileys) {
+        console.warn(`[Baileys Watchdog] ⚠️ تم رصد انقطاع خامل في WebSocket (حالة المقبس: ${wsReadyState})، جاري إعادة الاتصال التلقائي...`);
+        whatsappState.status = 'reconnecting';
+        if (reconnectTimer) clearTimeout(reconnectTimer);
+        reconnectTimer = setTimeout(() => {
+          connectToWhatsApp(false);
+        }, 1500);
+      }
+    } else if (!whatsappState.isLoggedIn && hasCreds && !isInitializingBaileys && whatsappState.status === 'disconnected') {
+      console.log('[Baileys Watchdog] 🔄 توجد جلسة محفوظة ولكن المحرك غير متصل، جاري إعادة الاتصال التلقائي...');
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      reconnectTimer = setTimeout(() => {
+        connectToWhatsApp(false);
+      }, 2000);
+    }
+  }, 30000);
+}
+
+// Render & Cloud Hosting 24/7 Anti-Sleep Keep-Alive Runner (prevents free instance spin-down)
+let renderKeepAliveInterval: NodeJS.Timeout | null = null;
+function setupRenderKeepAliveRunner() {
+  if (renderKeepAliveInterval) {
+    clearInterval(renderKeepAliveInterval);
+    renderKeepAliveInterval = null;
+  }
+
+  const pingUrl = process.env.RENDER_EXTERNAL_URL || process.env.APP_URL || (settings as any).renderKeepAliveUrl;
+  if (!pingUrl) {
+    return;
+  }
+
+  const cleanUrl = pingUrl.trim().replace(/\/$/, '');
+  const target = cleanUrl.endsWith('/api/health') ? cleanUrl : `${cleanUrl}/api/health`;
+  console.log(`[Render Keep-Alive] 🛡️ تفعيل الحماية التلقائية لمنع نوم السيرفر على Render كل 9 دقائق: ${target}`);
+
+  renderKeepAliveInterval = setInterval(async () => {
+    try {
+      const res = await fetch(target);
+      if (res.ok) {
+        console.log(`[Render Keep-Alive] 💓 نبضة الحفاظ على استيقاظ السيرفر بنجاح (${getRiyadhTimeString()})`);
+      }
+    } catch (e: any) {
+      console.warn(`[Render Keep-Alive Warning] ${e?.message}`);
+    }
+  }, 9 * 60 * 1000);
 }
 
 // Helper: Send Direct WhatsApp Message via Baileys and/or Webhook URL (with wa.me link fallback)
@@ -1534,6 +1730,21 @@ app.post('/api/reports/send-daily', (req: Request, res: Response) => {
   });
 });
 
+// Health check endpoint for Render keep-alive and cloud load balancers
+app.get('/api/health', (req: Request, res: Response) => {
+  res.json({
+    status: 'ok',
+    timestamp: new Date().toISOString(),
+    riyadhTime: getRiyadhTimeString(),
+    whatsappStatus: whatsappState.status,
+    whatsappLoggedIn: whatsappState.isLoggedIn,
+    ordersCount: orders.length,
+    couriersCount: couriers.length,
+    persistentDir: PERSISTENT_DIR,
+    hasSavedSession: fs.existsSync(path.join(AUTH_DIR, 'creds.json')),
+  });
+});
+
 // 5b. Direct WhatsApp Baileys Status & Session Management API
 app.get('/api/whatsapp/status', async (req: Request, res: Response) => {
   const hasSavedSession = fs.existsSync(path.join(AUTH_DIR, 'creds.json'));
@@ -1549,11 +1760,58 @@ app.get('/api/whatsapp/status', async (req: Request, res: Response) => {
     whatsappState,
     terminalQr,
     sessionDir: AUTH_DIR,
+    persistentDir: PERSISTENT_DIR,
     hasSavedSession,
+    hasBackupInDb: Boolean(whatsappSessionBackup && whatsappSessionBackup['creds.json']),
+    sessionBackup: whatsappSessionBackup,
+    isRender: Boolean(process.env.RENDER || process.env.RENDER_EXTERNAL_URL),
+    renderExternalUrl: process.env.RENDER_EXTERNAL_URL || null,
     cooldownMinutes: settings.alertCooldownMinutes,
     antiBanMinDelay: settings.antiBanMinDelaySeconds,
     antiBanMaxDelay: settings.antiBanMaxDelaySeconds,
   });
+});
+
+// Export Session Payload (can be downloaded or copied to another server/localStorage)
+app.get('/api/whatsapp/export-session', (req: Request, res: Response) => {
+  const hasSession = Boolean(whatsappSessionBackup && whatsappSessionBackup['creds.json']);
+  res.json({
+    success: true,
+    hasSession,
+    filesCount: Object.keys(whatsappSessionBackup || {}).length,
+    sessionBackup: whatsappSessionBackup || {},
+    userPhone: whatsappState.userPhone,
+    userName: whatsappState.userName,
+    exportedAt: new Date().toISOString(),
+  });
+});
+
+// Restore Session from Payload (called from UI, localStorage, or migration)
+app.post('/api/whatsapp/restore-session', async (req: Request, res: Response) => {
+  const { sessionBackup } = req.body;
+  if (!sessionBackup || typeof sessionBackup !== 'object' || !sessionBackup['creds.json']) {
+    res.status(400).json({
+      success: false,
+      message: 'بيانات الجلسة المرسلة غير صالحة أو لا تحتوي على مفتاح creds.json الأساسي',
+    });
+    return;
+  }
+
+  const restored = restoreBaileysSessionFromBackup(sessionBackup);
+  if (restored) {
+    console.log('[Baileys Engine] 📥 تم استلام واستعادة مفاتيح الجلسة من الواجهة الخارجية بنجاح. جاري الاتصال المباشر...');
+    connectToWhatsApp(false);
+    res.json({
+      success: true,
+      message: 'تم استيراد وحفظ جلسة الواتساب بنجاح، جاري التحقق والاتصال التلقائي بدون QR!',
+      whatsappState,
+    });
+  } else {
+    res.status(500).json({
+      success: false,
+      message: 'تعذر حفظ ملفات الجلسة في مسار السيرفر',
+    });
+  }
 });
 
 app.post('/api/whatsapp/reconnect', async (req: Request, res: Response) => {
@@ -2758,6 +3016,12 @@ async function startServer() {
   connectToWhatsApp().catch((err) => {
     console.error('[Baileys Startup Error]', err);
   });
+
+  // Start 24/7 Baileys connection watchdog (checks socket health every 30s)
+  setupBaileysHeartbeat();
+
+  // Start 24/7 Render Anti-Sleep Keep-Alive runner
+  setupRenderKeepAliveRunner();
 
   // Start 24/7 direct cloud auto-sync engine (automatic orders pull without user intervention)
   setupCloudAutoSyncRunner();
