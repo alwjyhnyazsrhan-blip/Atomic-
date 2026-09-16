@@ -137,6 +137,24 @@ export const Header: React.FC<HeaderProps> = ({
               )}
             </button>
 
+            {/* Dedicated Locat Instance Account Button */}
+            <button
+              type="button"
+              onClick={onOpenSettings}
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition shadow-2xs border ${
+                settings.locateEmail || cloudSyncState?.email
+                  ? 'bg-emerald-50 hover:bg-emerald-100 text-emerald-900 border-emerald-300'
+                  : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-300'
+              }`}
+              title="حساب لوكيت المخصص لهذه النسخة (اضغط لتعديل وتثبيت بيانات تسجيل الدخول على القرص الدائم)"
+            >
+              <Zap className="w-3.5 h-3.5 text-emerald-600 animate-pulse" />
+              <span>حساب لوكيت:</span>
+              <span className="font-mono text-emerald-900" dir="ltr">
+                {settings.locateEmail || cloudSyncState?.email || 'اضغط لربط الحساب'}
+              </span>
+            </button>
+
             {/* WhatsApp Session / QR Button */}
             {onOpenWhatsApp && (
               <button

@@ -150,7 +150,7 @@ export const LiveOrdersView: React.FC<LiveOrdersViewProps> = ({
               <Zap className="w-5 h-5 animate-pulse" />
             </div>
             <div>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <h3 className="font-bold text-sm sm:text-base text-emerald-900">
                   السحب التلقائي السحابي المباشر شغال بدون أي تدخل منك (24/7 Auto-Sync)
                 </h3>
@@ -158,11 +158,19 @@ export const LiveOrdersView: React.FC<LiveOrdersViewProps> = ({
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping"></span>
                   نشط ومربوط
                 </span>
+                {(settings.locateEmail || cloudSyncState.email) && (
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-white text-emerald-900 border border-emerald-300 font-mono shadow-2xs" dir="ltr">
+                    👤 {settings.locateEmail || cloudSyncState.email}
+                  </span>
+                )}
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-medium bg-emerald-100/70 text-emerald-800">
+                  💾 حفظ دائم بالقرص
+                </span>
               </div>
               <p className="text-xs text-emerald-700 mt-0.5">
                 {cloudSyncState.lastSyncTime
                   ? `آخر سحب ناجح: ${new Date(cloudSyncState.lastSyncTime).toLocaleTimeString('ar-SA', { timeZone: 'Asia/Riyadh', hour: '2-digit', minute: '2-digit' })} | تم سحب ${cloudSyncState.lastCouriersCount || couriers.length} مندوب و ${cloudSyncState.lastOrdersCount || orders.length} طلب (${cloudSyncState.activeOrdersCount || activeOrders.length} نشط) | فحص آلي كل ${settings.locatSyncIntervalSeconds || 20} ثانية`
-                  : `يقوم الخادم بالاتصال المباشر بـ Locate وسحب ومراقبة المناديب والطلبات تلقائياً كل ${settings.locatSyncIntervalSeconds || 20} ثانية`}
+                  : `يقوم الخادم بالاتصال المباشر بـ Locate بحساب (${settings.locateEmail || cloudSyncState.email || 'المخصص'}) وسحب ومراقبة المناديب والطلبات تلقائياً كل ${settings.locatSyncIntervalSeconds || 20} ثانية`}
               </p>
               {cloudSyncState.lastError && (
                 <p className="text-xs text-rose-600 mt-0.5 font-medium">

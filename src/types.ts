@@ -104,6 +104,10 @@ export interface CloudSyncState {
   email?: string;
   companyId?: string;
   nextSyncSecondsRemaining?: number;
+  hasSavedCredentialsOnDisk?: boolean;
+  credentialsFile?: string;
+  persistentDir?: string;
+  envConfigured?: boolean;
 }
 
 export interface QueuedWhatsAppMessage {

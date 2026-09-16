@@ -5,6 +5,10 @@ coverage/
 .DS_Store
 *.log
 baileys_auth_info/
+locat_credentials.json
+locat_database.json
+baileys_session_backup.json
+atomic-*/
 .cache/
 .env*
 !.env.example

@@ -74,36 +74,51 @@ function getPersistentDirectory(): string {
     const parent = path.dirname(path.resolve(process.env.BAILEYS_AUTH_DIR));
     if (fs.existsSync(parent)) return parent;
   }
+  let baseDir = process.cwd();
   if (process.env.PERSISTENT_DATA_DIR && fs.existsSync(process.env.PERSISTENT_DATA_DIR)) {
-    return path.resolve(process.env.PERSISTENT_DATA_DIR);
+    baseDir = path.resolve(process.env.PERSISTENT_DATA_DIR);
+  } else if (process.env.RENDER_DISK_PATH && fs.existsSync(process.env.RENDER_DISK_PATH)) {
+    baseDir = path.resolve(process.env.RENDER_DISK_PATH);
+  } else if (process.env.DATA_DIR && fs.existsSync(process.env.DATA_DIR)) {
+    baseDir = path.resolve(process.env.DATA_DIR);
+  } else {
+    // Check standard Render persistent disk mount /data
+    try {
+      if (fs.existsSync('/data')) {
+        fs.accessSync('/data', fs.constants.W_OK);
+        console.log('[Storage Engine] 💾 تم رصد واستخدام القرص السحابي الدائم المثبت على Render: /data');
+        baseDir = '/data';
+      } else if (fs.existsSync('/var/data')) {
+        fs.accessSync('/var/data', fs.constants.W_OK);
+        console.log('[Storage Engine] 💾 تم رصد واستخدام القرص السحابي الدائم: /var/data');
+        baseDir = '/var/data';
+      }
+    } catch (e) {}
   }
-  if (process.env.RENDER_DISK_PATH && fs.existsSync(process.env.RENDER_DISK_PATH)) {
-    return path.resolve(process.env.RENDER_DISK_PATH);
-  }
-  if (process.env.DATA_DIR && fs.existsSync(process.env.DATA_DIR)) {
-    return path.resolve(process.env.DATA_DIR);
-  }
-  // Check standard Render persistent disk mount /data
-  try {
-    if (fs.existsSync('/data')) {
-      fs.accessSync('/data', fs.constants.W_OK);
-      console.log('[Storage Engine] 💾 تم رصد واستخدام القرص السحابي الدائم المثبت على Render: /data');
-      return '/data';
+
+  // If INSTANCE_NAME is provided, isolate in dedicated subfolder
+  const instanceName = (process.env.INSTANCE_NAME || '').trim();
+  if (instanceName) {
+    const instanceDir = path.resolve(baseDir, instanceName);
+    if (!fs.existsSync(instanceDir)) {
+      try {
+        fs.mkdirSync(instanceDir, { recursive: true });
+        console.log(`[Storage Engine] 📁 تم إنشاء وتخصيص مجلد التخزين المستقل للنسخة (${instanceName}): ${instanceDir}`);
+      } catch (err: any) {
+        console.warn(`[Storage Engine] تعذر إنشاء مجلد النسخة المستقل:`, err?.message);
+      }
     }
-  } catch (e) {}
-  try {
-    if (fs.existsSync('/var/data')) {
-      fs.accessSync('/var/data', fs.constants.W_OK);
-      console.log('[Storage Engine] 💾 تم رصد واستخدام القرص السحابي الدائم: /var/data');
-      return '/var/data';
-    }
-  } catch (e) {}
-  return process.cwd();
+    if (fs.existsSync(instanceDir)) return instanceDir;
+  }
+
+  return baseDir;
 }
 
+const INSTANCE_NAME = (process.env.INSTANCE_NAME || 'atomic-abu-sultan').trim();
 const PERSISTENT_DIR = getPersistentDirectory();
 const STORE_FILE = path.resolve(PERSISTENT_DIR, 'locat_database.json');
 const SESSION_BACKUP_FILE = path.resolve(PERSISTENT_DIR, 'baileys_session_backup.json');
+const LOCAT_CREDENTIALS_FILE = path.resolve(PERSISTENT_DIR, 'locat_credentials.json');
 const AUTH_DIR = process.env.BAILEYS_AUTH_DIR || path.resolve(PERSISTENT_DIR, 'baileys_auth_info');
 
 let couriers: Courier[] = [];
@@ -111,6 +126,38 @@ let orders: Order[] = [];
 let alerts: AlertLog[] = [];
 let customCourierPhones: Record<string, { phone: string; name?: string; updatedAt: string }> = {};
 let whatsappSessionBackup: Record<string, string> = {};
+
+function saveLocatCredentialsToDisk(creds?: {
+  email?: string;
+  username?: string;
+  password?: string;
+  companyId?: string;
+  accessToken?: string;
+}) {
+  try {
+    const emailToSave = creds?.email || creds?.username || settings.locateEmail || settings.locateUsername || '';
+    const passwordToSave = creds?.password !== undefined ? creds.password : settings.locatePassword || '';
+    const companyIdToSave = creds?.companyId !== undefined ? creds.companyId : settings.locateCompanyId || '';
+    const tokenToSave = creds?.accessToken !== undefined ? creds.accessToken : settings.locateAccessToken || '';
+
+    if (!emailToSave && !passwordToSave && !tokenToSave) return;
+
+    const payload = {
+      locateEmail: emailToSave,
+      locateUsername: emailToSave,
+      locatePassword: passwordToSave,
+      locateCompanyId: companyIdToSave,
+      locateAccessToken: tokenToSave,
+      updatedAt: new Date().toISOString(),
+      note: 'بيانات حساب لوكيت المخصص لهذه النسخة (محفوظة بشكل دائم لمنع تسجيل الخروج)',
+    };
+
+    fs.writeFileSync(LOCAT_CREDENTIALS_FILE, JSON.stringify(payload, null, 2), 'utf-8');
+    console.log(`[Store] 💾 تم حفظ وتثبيت بيانات حساب لوكيت (${emailToSave}) في الملف الدائم: ${LOCAT_CREDENTIALS_FILE}`);
+  } catch (err: any) {
+    console.warn('[Store] تحذير عند حفظ ملف بيانات اعتماد لوكيت:', err?.message);
+  }
+}
 
 function backupBaileysSession() {
   try {
@@ -205,6 +252,53 @@ function loadStoreFromDisk() {
       console.log(`[Store] ✅ تم تحميل البيانات من القرص: ${couriers.length} مندوب، ${orders.length} طلب.`);
     }
 
+    // Check dedicated credentials file in persistent storage
+    if (fs.existsSync(LOCAT_CREDENTIALS_FILE)) {
+      try {
+        const rawCreds = fs.readFileSync(LOCAT_CREDENTIALS_FILE, 'utf-8');
+        const creds = JSON.parse(rawCreds);
+        if (creds && typeof creds === 'object') {
+          if (creds.locateEmail || creds.locateUsername) {
+            settings.locateEmail = (creds.locateEmail || creds.locateUsername || '').trim();
+            settings.locateUsername = settings.locateEmail;
+          }
+          if (creds.locatePassword) {
+            settings.locatePassword = creds.locatePassword.trim();
+          }
+          if (creds.locateCompanyId) {
+            settings.locateCompanyId = String(creds.locateCompanyId).trim();
+          }
+          if (creds.locateAccessToken && !settings.locateAccessToken) {
+            settings.locateAccessToken = creds.locateAccessToken.trim();
+          }
+          console.log(`[Store] 🔐 تم استرجاع بيانات حساب لوكيت المخصص (${settings.locateEmail}) بنجاح من الملف الدائم`);
+        }
+      } catch (e: any) {
+        console.warn('[Store] تحذير عند قراءة ملف بيانات الاعتماد:', e?.message);
+      }
+    }
+
+    // Environment variables take precedence if provided (allowing container / deployment customization)
+    const envEmail = (process.env.LOCAT_EMAIL || process.env.LOCAT_USERNAME || '').trim();
+    const envPassword = (process.env.LOCAT_PASSWORD || '').trim();
+    const envCompanyId = (process.env.LOCAT_COMPANY_ID || '').trim();
+    const envToken = (process.env.LOCAT_ACCESS_TOKEN || '').trim();
+
+    if (envEmail) {
+      settings.locateEmail = envEmail;
+      settings.locateUsername = envEmail;
+      console.log(`[Store] 🌐 تم تعيين حساب لوكيت من متغيرات البيئة: ${envEmail}`);
+    }
+    if (envPassword) {
+      settings.locatePassword = envPassword;
+    }
+    if (envCompanyId) {
+      settings.locateCompanyId = envCompanyId;
+    }
+    if (envToken) {
+      settings.locateAccessToken = envToken;
+    }
+
     // Also check standalone session backup file if not present in main db
     if ((!whatsappSessionBackup || !whatsappSessionBackup['creds.json']) && fs.existsSync(SESSION_BACKUP_FILE)) {
       try {
@@ -225,6 +319,9 @@ function saveStoreToDisk() {
   try {
     const data = { couriers, orders, alerts, settings, customCourierPhones, whatsappSessionBackup };
     fs.writeFileSync(STORE_FILE, JSON.stringify(data, null, 2), 'utf-8');
+    if (settings.locateEmail || settings.locatePassword || settings.locateAccessToken) {
+      saveLocatCredentialsToDisk();
+    }
   } catch (err) {
     console.error('[Store] فشل حفظ البيانات في القرص:', err);
   }
@@ -1224,14 +1321,18 @@ app.post('/api/settings', (req: Request, res: Response) => {
     webhookUrl: body.webhookUrl !== undefined ? body.webhookUrl : settings.webhookUrl,
     webhookApiKey: body.webhookApiKey !== undefined ? body.webhookApiKey : settings.webhookApiKey,
     enablePuppeteerHeadless: body.enablePuppeteerHeadless !== undefined ? Boolean(body.enablePuppeteerHeadless) : settings.enablePuppeteerHeadless,
-    locateUsername: body.locateUsername !== undefined ? body.locateUsername : settings.locateUsername,
-    locatePassword: body.locatePassword !== undefined ? body.locatePassword : settings.locatePassword,
-    locateEmail: body.locateEmail !== undefined ? body.locateEmail : settings.locateEmail,
-    locateCompanyId: body.locateCompanyId !== undefined ? body.locateCompanyId : settings.locateCompanyId,
-    locateAccessToken: body.locateAccessToken !== undefined ? body.locateAccessToken : settings.locateAccessToken,
+    locateUsername: (body.locateUsername !== undefined ? body.locateUsername : (body.locateEmail !== undefined ? body.locateEmail : settings.locateUsername))?.trim(),
+    locatePassword: body.locatePassword !== undefined ? body.locatePassword.trim() : settings.locatePassword,
+    locateEmail: (body.locateEmail !== undefined ? body.locateEmail : (body.locateUsername !== undefined ? body.locateUsername : settings.locateEmail))?.trim(),
+    locateCompanyId: body.locateCompanyId !== undefined ? String(body.locateCompanyId).trim() : settings.locateCompanyId,
+    locateAccessToken: body.locateAccessToken !== undefined ? body.locateAccessToken.trim() : settings.locateAccessToken,
     enableCloudAutoSync: body.enableCloudAutoSync !== undefined ? Boolean(body.enableCloudAutoSync) : settings.enableCloudAutoSync,
     locatSyncIntervalSeconds: Number(body.locatSyncIntervalSeconds) || settings.locatSyncIntervalSeconds,
   };
+
+  if (settings.locateEmail || settings.locatePassword || settings.locateAccessToken) {
+    saveLocatCredentialsToDisk();
+  }
 
   puppeteerStatus.enabled = settings.enablePuppeteerHeadless;
 
@@ -2487,6 +2588,7 @@ app.get('/api/locat/cloud-status', (req: Request, res: Response) => {
   const password = settings.locatePassword || '';
   const hasCredentials = Boolean(email && password);
   const hasToken = Boolean(settings.locateAccessToken);
+  const hasSavedCredentialsOnDisk = fs.existsSync(LOCAT_CREDENTIALS_FILE);
 
   res.json({
     success: true,
@@ -2497,11 +2599,124 @@ app.get('/api/locat/cloud-status', (req: Request, res: Response) => {
       hasToken,
       email,
       companyId: settings.locateCompanyId,
+      hasSavedCredentialsOnDisk,
+      credentialsFile: LOCAT_CREDENTIALS_FILE,
+      persistentDir: PERSISTENT_DIR,
+      instanceName: INSTANCE_NAME,
+      envConfigured: Boolean(process.env.LOCAT_EMAIL || process.env.LOCAT_USERNAME),
     },
+    instanceName: INSTANCE_NAME,
+    email,
+    hasPassword: Boolean(password),
+    companyId: settings.locateCompanyId || '',
+    hasSavedCredentialsOnDisk,
+    credentialsFile: LOCAT_CREDENTIALS_FILE,
+    persistentDir: PERSISTENT_DIR,
+    envConfigured: Boolean(process.env.LOCAT_EMAIL || process.env.LOCAT_USERNAME),
     ordersCount: orders.length,
     delayedCount: orders.filter((o) => o.isDelayed).length,
     intervalSeconds: settings.locatSyncIntervalSeconds || 20,
   });
+});
+
+app.post('/api/locat/save-credentials', async (req: Request, res: Response) => {
+  const { email, username, password, company_id, auto_login, enable_sync } = req.body || {};
+  const targetEmail = (email || username || '').trim();
+  const targetPassword = password !== undefined ? String(password).trim() : (settings.locatePassword || '');
+  const targetCompanyId = company_id !== undefined ? String(company_id).trim() : (settings.locateCompanyId || '');
+
+  if (!targetEmail) {
+    res.status(400).json({ success: false, message: 'اسم المستخدم أو البريد الإلكتروني لحساب لوكيت مطلوب' });
+    return;
+  }
+
+  settings.locateEmail = targetEmail;
+  settings.locateUsername = targetEmail;
+  if (targetPassword) {
+    settings.locatePassword = targetPassword;
+  }
+  if (targetCompanyId) {
+    settings.locateCompanyId = targetCompanyId;
+  }
+  if (enable_sync !== undefined) {
+    settings.enableCloudAutoSync = Boolean(enable_sync);
+  } else {
+    settings.enableCloudAutoSync = true;
+  }
+
+  saveLocatCredentialsToDisk({
+    email: targetEmail,
+    username: targetEmail,
+    password: settings.locatePassword,
+    companyId: settings.locateCompanyId,
+    accessToken: settings.locateAccessToken,
+  });
+  saveStoreToDisk();
+
+  let loginResult: any = null;
+  let syncResult: any = null;
+
+  if (auto_login !== false && settings.locatePassword) {
+    loginResult = await autoLoginToLocatCloud(targetEmail, settings.locatePassword, settings.locateCompanyId);
+    if (loginResult.token) {
+      settings.locateAccessToken = loginResult.token;
+      if (loginResult.companyId) {
+        settings.locateCompanyId = loginResult.companyId;
+      }
+      saveLocatCredentialsToDisk({
+        email: targetEmail,
+        username: targetEmail,
+        password: settings.locatePassword,
+        companyId: settings.locateCompanyId,
+        accessToken: settings.locateAccessToken,
+      });
+      saveStoreToDisk();
+
+      syncResult = await executeLocatCloudSync();
+    }
+  }
+
+  res.json({
+    success: true,
+    message: loginResult?.token
+      ? `✅ تم ربط حساب (${targetEmail}) وتسجيل الدخول بنجاح وسحب الطلبات تلقائياً!`
+      : `✅ تم حفظ وتثبيت بيانات حساب (${targetEmail}) في ملف التخزين الدائم بنجاح`,
+    loginResult,
+    syncResult,
+    cloudSyncState: {
+      ...cloudSyncState,
+      email: settings.locateEmail,
+      companyId: settings.locateCompanyId,
+      hasSavedCredentialsOnDisk: true,
+    },
+    settings: {
+      locateEmail: settings.locateEmail,
+      locateUsername: settings.locateUsername,
+      locateCompanyId: settings.locateCompanyId,
+      hasPassword: Boolean(settings.locatePassword),
+      enableCloudAutoSync: settings.enableCloudAutoSync,
+    },
+  });
+});
+
+app.post('/api/locat/cloud-logout', (req: Request, res: Response) => {
+  const { clearCredentials } = req.body || {};
+  settings.locateAccessToken = '';
+  if (clearCredentials) {
+    settings.locateEmail = '';
+    settings.locateUsername = '';
+    settings.locatePassword = '';
+    settings.locateCompanyId = '';
+    if (fs.existsSync(LOCAT_CREDENTIALS_FILE)) {
+      try {
+        fs.unlinkSync(LOCAT_CREDENTIALS_FILE);
+      } catch (e) {}
+    }
+  }
+  cloudSyncState.status = 'unauthenticated';
+  cloudSyncState.hasToken = false;
+  saveStoreToDisk();
+  res.json({ success: true, message: 'تم تسجيل الخروج من حساب لوكيت بنجاح' });
 });
 
 app.post('/api/locat/cloud-pre-login', async (req: Request, res: Response) => {
@@ -2537,12 +2752,20 @@ app.post('/api/locat/cloud-login', async (req: Request, res: Response) => {
   const result = await autoLoginToLocatCloud(email.trim(), password.trim(), company_id);
   if (result.token) {
     settings.locateEmail = email.trim();
+    settings.locateUsername = email.trim();
     settings.locatePassword = password.trim();
     settings.locateAccessToken = result.token;
     if (result.companyId) {
       settings.locateCompanyId = result.companyId;
     }
     settings.enableCloudAutoSync = true;
+    saveLocatCredentialsToDisk({
+      email: settings.locateEmail,
+      username: settings.locateUsername,
+      password: settings.locatePassword,
+      companyId: settings.locateCompanyId,
+      accessToken: settings.locateAccessToken,
+    });
     saveStoreToDisk();
 
     // Trigger immediate first pull
