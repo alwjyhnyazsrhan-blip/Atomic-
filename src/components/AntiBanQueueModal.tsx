@@ -21,12 +21,14 @@ interface AntiBanQueueModalProps {
   isOpen: boolean;
   onClose: () => void;
   settings: SystemSettings;
+  onSaveSettings?: (newSettings: Partial<SystemSettings>) => void;
 }
 
 export const AntiBanQueueModal: React.FC<AntiBanQueueModalProps> = ({
   isOpen,
   onClose,
   settings,
+  onSaveSettings,
 }) => {
   const [queue, setQueue] = useState<QueuedWhatsAppMessage[]>([]);
   const [stats, setStats] = useState<{
@@ -48,6 +50,57 @@ export const AntiBanQueueModal: React.FC<AntiBanQueueModalProps> = ({
   });
   const [loading, setLoading] = useState(false);
   const [activeTab, setActiveTab] = useState<'queue' | 'vps_info'>('queue');
+
+  // Quick Sending Delay Editor State
+  const [minDelay, setMinDelay] = useState<number>(settings.antiBanMinDelaySeconds ?? 5);
+  const [maxDelay, setMaxDelay] = useState<number>(settings.antiBanMaxDelaySeconds ?? 10);
+  const [cooldownMins, setCooldownMins] = useState<number>(settings.alertCooldownMinutes ?? 20);
+  const [isSavingDelay, setIsSavingDelay] = useState(false);
+  const [saveSuccessMsg, setSaveSuccessMsg] = useState('');
+
+  useEffect(() => {
+    if (isOpen) {
+      setMinDelay(settings.antiBanMinDelaySeconds ?? 5);
+      setMaxDelay(settings.antiBanMaxDelaySeconds ?? 10);
+      setCooldownMins(settings.alertCooldownMinutes ?? 20);
+      setSaveSuccessMsg('');
+    }
+  }, [isOpen]);
+
+  const handleSaveDelaySettings = async () => {
+    setIsSavingDelay(true);
+    const minSec = Math.max(1, Number(minDelay) || 5);
+    const maxSec = Math.max(minSec, Number(maxDelay) || minSec);
+    const payload = {
+      antiBanMinDelaySeconds: minSec,
+      antiBanMaxDelaySeconds: maxSec,
+      alertCooldownMinutes: Math.max(1, Number(cooldownMins) || 20),
+    };
+
+    try {
+      const res = await fetch('/api/settings/delays', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (data.success) {
+        if (typeof window !== 'undefined') {
+          const cur = JSON.parse(localStorage.getItem('locat_settings') || '{}');
+          localStorage.setItem('locat_settings', JSON.stringify({ ...cur, ...payload }));
+        }
+        if (onSaveSettings) {
+          onSaveSettings(payload);
+        }
+        setSaveSuccessMsg(`تم بنجاح تحديث وتطبيق زمن الإرسال: ${minSec}-${maxSec} ثوانٍ!`);
+        setTimeout(() => setSaveSuccessMsg(''), 4000);
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setIsSavingDelay(false);
+    }
+  };
 
   const fetchQueueData = async () => {
     try {
@@ -193,6 +246,133 @@ export const AntiBanQueueModal: React.FC<AntiBanQueueModalProps> = ({
                 <span className="font-bold text-sm text-slate-800 mt-1 block font-mono">
                   {settings.antiBanMinDelaySeconds || 5}-{settings.antiBanMaxDelaySeconds || 10} ثوانٍ
                 </span>
+              </div>
+            </div>
+
+            {/* Direct Delay Adjustment Card (Requested: تعديل زمن ارسال الرسائل) */}
+            <div className="p-4 bg-emerald-50/80 rounded-2xl border border-emerald-200 shadow-xs space-y-3">
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <div className="flex items-center gap-2">
+                  <div className="w-7 h-7 rounded-lg bg-emerald-600 text-white flex items-center justify-center">
+                    <Clock className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-xs text-slate-900">
+                      تعديل زمن إرسال الرسائل وفارق الطابور (Anti-Ban Delay)
+                    </h3>
+                    <p className="text-[10px] text-slate-600">
+                      تحكم بالثواني الفاصلة بين كل رسالة وأخرى لتفادي الحظر وضمان انسيابية الإرسال
+                    </p>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handleSaveDelaySettings}
+                  disabled={isSavingDelay}
+                  className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 transition shadow-xs"
+                >
+                  <CheckCircle2 className="w-3.5 h-3.5" />
+                  <span>{isSavingDelay ? 'جاري الحفظ...' : 'حفظ وتطبيق زمن الإرسال الجديد'}</span>
+                </button>
+              </div>
+
+              {saveSuccessMsg && (
+                <div className="p-2 bg-emerald-100 text-emerald-900 rounded-lg text-xs font-bold flex items-center gap-1.5 animate-fade-in border border-emerald-300">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-700" />
+                  <span>{saveSuccessMsg}</span>
+                </div>
+              )}
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-1">
+                {/* Min Delay */}
+                <div className="bg-white p-2.5 rounded-xl border border-emerald-200">
+                  <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                    الحد الأدنى للتأخير (من):
+                  </label>
+                  <div className="flex items-center gap-1.5">
+                    <input
+                      type="number"
+                      min={1}
+                      max={120}
+                      value={minDelay}
+                      onChange={(e) => {
+                        const val = Math.max(1, Number(e.target.value) || 1);
+                        setMinDelay(val);
+                        if (maxDelay < val) setMaxDelay(val);
+                      }}
+                      className="w-full font-bold text-xs px-2.5 py-1.5 bg-slate-50 border border-slate-300 rounded-lg text-center"
+                    />
+                    <span className="text-xs text-slate-500 font-bold">ثوانٍ</span>
+                  </div>
+                </div>
+
+                {/* Max Delay */}
+                <div className="bg-white p-2.5 rounded-xl border border-emerald-200">
+                  <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                    الحد الأقصى للتأخير (إلى):
+                  </label>
+                  <div className="flex items-center gap-1.5">
+                    <input
+                      type="number"
+                      min={1}
+                      max={120}
+                      value={maxDelay}
+                      onChange={(e) => {
+                        const val = Math.max(1, Number(e.target.value) || 1);
+                        setMaxDelay(val);
+                      }}
+                      className="w-full font-bold text-xs px-2.5 py-1.5 bg-slate-50 border border-slate-300 rounded-lg text-center"
+                    />
+                    <span className="text-xs text-slate-500 font-bold">ثوانٍ</span>
+                  </div>
+                </div>
+
+                {/* Cooldown */}
+                <div className="bg-white p-2.5 rounded-xl border border-emerald-200">
+                  <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                    فترة السماح (Cooldown):
+                  </label>
+                  <div className="flex items-center gap-1.5">
+                    <input
+                      type="number"
+                      min={1}
+                      max={180}
+                      value={cooldownMins}
+                      onChange={(e) => setCooldownMins(Math.max(1, Number(e.target.value) || 1))}
+                      className="w-full font-bold text-xs px-2.5 py-1.5 bg-slate-50 border border-slate-300 rounded-lg text-center"
+                    />
+                    <span className="text-xs text-slate-500 font-bold">دقيقة</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Quick Presets */}
+              <div className="flex items-center gap-1.5 pt-1 flex-wrap text-xs">
+                <span className="text-[11px] text-slate-600 font-bold">أزمنة جاهزة وسريعة:</span>
+                {[
+                  { label: 'سريع (3-5 ثوانٍ)', min: 3, max: 5 },
+                  { label: 'متزن (5-10 ثوانٍ)', min: 5, max: 10 },
+                  { label: 'آمن (10-20 ثانية)', min: 10, max: 20 },
+                  { label: 'ثابت (5 ثوانٍ)', min: 5, max: 5 },
+                  { label: 'ثابت (10 ثوانٍ)', min: 10, max: 10 },
+                ].map((preset) => (
+                  <button
+                    key={preset.label}
+                    type="button"
+                    onClick={() => {
+                      setMinDelay(preset.min);
+                      setMaxDelay(preset.max);
+                    }}
+                    className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition ${
+                      minDelay === preset.min && maxDelay === preset.max
+                        ? 'bg-emerald-700 text-white border-emerald-700'
+                        : 'bg-white text-slate-700 border-slate-200 hover:bg-emerald-100/60'
+                    }`}
+                  >
+                    {preset.label}
+                  </button>
+                ))}
               </div>
             </div>
 

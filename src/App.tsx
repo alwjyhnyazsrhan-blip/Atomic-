@@ -116,43 +116,7 @@ export default function App() {
           } catch (e) {}
         }
       }
-      if (cloudRes?.success && cloudRes.cloudSyncState) {
-        setCloudSyncState(cloudRes.cloudSyncState);
-
-        // Fail-safe persistence: If server has no credentials/token (e.g. freshly created container without persistent disk)
-        // but browser has saved credentials for this instance, auto-restore them to the server!
-        if (!cloudRes.cloudSyncState.hasCredentials && !cloudRes.cloudSyncState.hasToken) {
-          try {
-            const savedLocalCreds = localStorage.getItem('locat_saved_credentials');
-            if (savedLocalCreds) {
-              const parsed = JSON.parse(savedLocalCreds);
-              if (parsed && (parsed.email || parsed.username) && parsed.password) {
-                console.log('[Locat Auto-Restore] 🔄 استعادة تلقائية لبيانات حساب لوكيت من ذاكرة المتصفح...');
-                fetch('/api/locat/save-credentials', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({
-                    email: parsed.email || parsed.username,
-                    username: parsed.username || parsed.email,
-                    password: parsed.password,
-                    company_id: parsed.companyId,
-                    auto_login: true,
-                    enable_sync: true,
-                  }),
-                })
-                  .then((r) => r.json())
-                  .then((data) => {
-                    if (data.success) {
-                      showToast(`تمت استعادة حساب لوكيت الخاص (${parsed.email || parsed.username}) تلقائياً للسيرفر`, 'success');
-                      fetchData(true);
-                    }
-                  })
-                  .catch(() => {});
-              }
-            }
-          } catch (e) {}
-        }
-      }
+      if (cloudRes?.success && cloudRes.cloudSyncState) setCloudSyncState(cloudRes.cloudSyncState);
     } catch (err) {
       console.error('Failed to sync system data:', err);
     } finally {
@@ -513,6 +477,7 @@ export default function App() {
             cloudSyncState={cloudSyncState}
             onTriggerCloudSync={handleTriggerCloudSync}
             onOpenSettings={() => setIsSettingsOpen(true)}
+            onSaveSettings={handleSaveSettings}
             onUpdateCourierPhone={handleUpdateCourierPhone}
           />
         )}
